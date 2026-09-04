@@ -1,0 +1,84 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+.DS_Store
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+.idea
+
+# --- bf-workspace additions ---
+
+# Local env files (override root .env rule — these are real)
+!.env.local
+!.env.ndss
+
+# Experiment runtime data and dumps
+results/
+*.log
+*.log.*
+
+# Experiment data dump archives (whitholding data.tar.gz, etc.)
+*.tar.gz
+*.tgz
+*.zip
+
+# Gradle / JVM build outputs (per project, recursive)
+build/
+.gradle/
+**/build/
+**/.gradle/
+
+# Go build outputs (in code/ subprojects)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+# but DO ship Go source under code/
+# (the *.exe rules above already exclude binaries)
+
+# Node / web frontend (if any)
+node_modules/
+dist/
+
+# IDE / editor cruft
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python (rl/ uses Python)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Local-only Docker build cache
+.docker-cache/
