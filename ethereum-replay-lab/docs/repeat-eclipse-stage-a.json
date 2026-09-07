@@ -1,0 +1,40 @@
+{
+  "profile": "eclipse",
+  "scenario": "stage-a",
+  "rounds": 3,
+  "results": [
+    {
+      "run_id": "stage-a-repeat-1",
+      "rc": 0,
+      "elapsed_s": 99.8,
+      "manifest": true,
+      "evidence": {
+        "victim_inbound_peers": 2,
+        "victim_staticdial": 0,
+        "last_peercount": 0
+      }
+    },
+    {
+      "run_id": "stage-a-repeat-2",
+      "rc": 0,
+      "elapsed_s": 101.4,
+      "manifest": true,
+      "evidence": {
+        "victim_inbound_peers": 2,
+        "victim_staticdial": 0,
+        "last_peercount": 0
+      }
+    },
+    {
+      "run_id": "stage-a-repeat-3",
+      "rc": 0,
+      "elapsed_s": 99.4,
+      "manifest": true,
+      "evidence": {
+        "victim_inbound_peers": 2,
+        "victim_staticdial": 0,
+        "last_peercount": 0
+      }
+    }
+  ]
+}

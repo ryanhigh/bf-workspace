@@ -1,0 +1,1 @@
+"""Profile adapter package. Concrete adapters live in submodules."""

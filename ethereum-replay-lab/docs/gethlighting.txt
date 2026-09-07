@@ -1,0 +1,1381 @@
+              Partitioning Ethereum without Eclipsing It
+
+       Hwanjo Heo                  Seungwon Woo                 Taeung Yoon           Min Suk Kang*              Seungwon Shin
+          ETRI                      ETRI/KAIST                  KAIST                 KAIST                          KAIST
+  Daejeon, South Korea          Daejeon, South Korea     Daejeon, South Korea Daejeon, South Korea            Daejeon, South Korea
+    hwanjo@etri.re.kr            seungww@etri.re.kr      yoontaeung@kaist.ac.kr minsukk@kaist.ac.kr            claude@kaist.ac.kr
+
+
+    Abstract—We present a practical partitioning attack, which         adversary can delay (either temporarily or indefinitely) the
+we call Gethlighting, that isolates an Ethereum full node from         blockchain’s canonical chain information and also feed any
+the rest of the network for hours without having to occupy (or         arbitrary transactions/blocks tailored for consensus violations,
+eclipse) all of the target’s peer connections. In Gethlighting, an     such as double spending attacks. For example, the Bitcoin
+adversary controls only about a half (e.g., 25 out of total 50)        eclipse attack [22] demonstrates that a botnet master with a
+of all peer connections of a target node, achieving powerful
+                                                                       small size (e.g., roughly 4.6K) botnet can easily control all
+partitioning with a small attack budget of operating several
+inexpensive virtual machines. At the core of Gethlighting, its low-    peer connections to a target node. The Bitcoin hijacking [3]
+rate denial-of-service (DoS) strategy effectively stops the growth     and Erebus [37] attacks demonstrate that a network adversary
+of local blockchain for hours while leaving other Ethereum             (e.g., a malicious ISP) can also take complete control over
+node operations undisturbed. We analyze how subtle and in-             a target’s peer connections. SyncAttack [33] shows that even
+significant delays incurred by a low-rate DoS can lead to a            partitioning an entire blockchain network is possible.
+powerful blockchain partitioning attack. The practical impact
+of Gethlighting is discussed — i.e., the attack is scalable and low-       We introduce an Ethereum partitioning attack, dubbed
+cost (only about $5,714 for targeting all Ethereum full nodes          Gethlighting, that, unlike these previous partitioning attacks,
+concurrently for 24 hours), and extremely simple to launch. We         does not require an adversary to have complete control over all
+demonstrate the feasibility of Gethlighting with full nodes in         peer connections of a target node. Our attack only requires to
+the Ethereum mainnet and testnet in both controlled and real-          control approximately half of a target Ethereum node’s 50 peer
+world experiments. We identify a number of fundamental system          connections, much less than what previous attacks demand, to
+characteristics in Ethereum that enable Gethlighting attacks
+                                                                       successfully demonstrate a practical partitioning attack in the
+and propose countermeasures that require some protocol and
+client implementation enhancements. Ethereum Foundation has            Ethereum mainnet. This essentially means that the other half
+acknowledged this vulnerability in September 2022 and one of our       of peer connections remain freely available for block delivery
+countermeasures has been accepted as a hotfix for Geth 1.11.0.         while the target node is partitioned by Gethlighting.
+                                                                           Controlling only about half of a target node’s peer con-
+                          I.   I NTRODUCTION                           nections, a Gethlighting adversary causes an effective low-
+    Highly reliable network connectivity across distributed            rate denial-of-service (DoS) disruption to significantly slow
+nodes is a critical system property for blockchain implementa-         down the growth of the blockchain at the target for up to
+tions that must persist even in the face of catastrophic network       a couple of hours. We present a highly surgical DoS attack
+failures or attacks. Thus, public, permissionless blockchains          that disturbs the chain growth of the target but leaves other
+are designed and operated with the goal of achieving reliable          operations undisrupted. The target still receives every message
+peer-to-peer connectivity. For example, a Bitcoin node by              (including new blocks and transactions) from its other benign
+default establishes up to 125 peer connections to achieve its          peers without any major disruption (unlike a recent Ethereum
+network reliability, while an Ethereum node typically makes            DoS attack [27]). Our attack gently disturbs the target’s multi-
+up to 50 connections.                                                  peer message handling logic so that it fails to process a new
+                                                                       block within a pre-defined timeout once in a while but not
+    The security community nevertheless continuously discov-           frequently. Such a rare timed-out reception of a new block,
+ers new attack vectors that partition one or more peer nodes in        however, is sufficient to stop the growth of the local blockchain
+these densely connected blockchain networks, demonstrating             since the block-level state transition is not commutative in the
+that network-layer attacks on blockchains can result in the            blockchain model [41]. Our in-depth study explains why Geth-
+violation of safety properties [3], [22], [33], [37]. At a high        lighting’s low-rate DoS strategy of utilizing invalid transactions
+level, these partitioning attacks need an airtight control of a        effectively partitions a target node while many other types of
+target node’s peer connections (a.k.a. eclipsing). With complete       low-cost DoS attacks are futile.
+control over the consensus information to a target node, an
+                                                                           Figure 1 shows an example of what happens to a real target
+  *Corresponding author
+                                                                       Ethereum node in the mainnet during a Gethlighting attack
+                                                                       that controls 32 of the target’s 50 connections. The primary
+                                                                       effect of this attack shown in this example is that the target’s
+Network and Distributed System Security (NDSS) Symposium 2023          chain stops growing for 521 blocks (about 1 hour 22 min) in
+27 February - 3 March 2023, San Diego, CA, USA
+ISBN 1-891562-83-5                                                     the worst case; see that one new block is generated at around
+https://dx.doi.org/10.14722/ndss.2023.24465                            T = 2, 800 sec, learned by the target instantly, but inserted
+www.ndss-symposium.org                                                 to the target’s chain at around T = 7, 800 sec! Note that the
+  (Relative) Block insertion/learning time (sec)                                                                 Ethereum client implementation that contribute to the
+                                                   12000                                                         effective Gethlighting attack (§IV).
+                                                                                                              3) We assess the proposed attack’s high-risk impact on the
+                                                   10000                                                         existing Ethereum network. First, Gethlighting is a low-cost
+                                                                                                                 attack. Since not having to eclipse a target greatly reduces
+                                                   8000                                                          attack costs, it can be carried out by anyone with several
+                                                                                                                 inexpensive virtual machines. Second, Gethlighting can
+                                                   6000                                                          simultaneously target multiple Ethereum nodes using the
+                                                                                                                 same set of virtual machines, making the attack easily scal-
+                                                   4000                                                          able. Our simple calculation estimates that it would require
+                                                                                                                 only about $5,714 for targeting all Ethereum full nodes
+                                                   2000                                                          concurrently for a full day! Third, Gethlighting is simple
+                                                                          Event: new block inserted
+                                                                          Event: new block learned               to prepare and execute (e.g., no knowledge of network
+                                                      0                                                          topology or routing information is required), making it an
+                                                           0   2000   4000     6000    8000 10000 12000
+                                                                                                                 attractive attack vector for unskilled adversaries (§VI). Last,
+                                                                 (Relative) Block generation time (sec)
+                                                                                                                 if an adversary has some mining capacity, she can easily
+Fig. 1: An example snapshot of two types of events experi-                                                       feed her own blocks to the target and establish a temporary
+enced by a mainnet target node during a Gethlighting attack:                                                     fork (§V-B), making Gethlighting a good launching pad for
+learning a new block (blue stars) and inserting the new block                                                    attacks like double spending [33] or stubborn mining [31].
+into its chain (red dots). The relative time of these events                                                  4) We propose a number of countermeasures that would
+is presented on the Y-axis while the relative time of their                                                      be necessary to mitigate the Gethlighting attack (§VII).
+initial block generation is on the X-axis. Gethlighting barely                                                   Since the five characteristics of Ethereum we analyze are
+delays block learning (i.e., most blue stars are on the unit-                                                    fundamental system features, not bugs, no simple, complete
+slope straight line) but significantly delays block insertion up                                                 solution appears to be available. We instead present
+to 4,842 sec (1h22m), implying that the target is seriously                                                      several minor tweaks to the Ethereum protocol and client
+partitioned.                                                                                                     implementation parameters to reduce the effectiveness of
+                                                                                                                 the attack. Our analysis suggests that all of these tweaks
+delays experienced for learning new blocks rarely exceeds 10                                                     come with some caveats; e.g., potentially opening up new
+seconds even when the target is under attack as it still receives                                                attack surfaces. Thus, careful, large-scale testing of these
+timely block information from its 18 other benign peers.                                                         potential countermeasures must be followed up to determine
+                                                                                                                 their optimal combination for the Ethereum network.
+     The main contribution of this paper can be summarized as
+follows:                                                                                                          Ethereum Foundation has acknowledged the Gethlighting
+                                                                                                              vulnerability in September 2022. In response to our suggestion
+1) We introduce the Ethereum Gethlighting attack (§III), a new
+                                                                                                              in Section VII-B (see the corresponding pull request [34]), the
+   partitioning attack that does not require complete control
+                                                                                                              Geth team has included a hotfix for Geth 1.11.0 [20].
+   of a target node’s peer connections. This relaxation lowers
+   the bar for partitioning attacks significantly. This is the                                                    For the demonstration of Gethlighting in this paper, we
+   first partitioning attack that does not require a total eclipse                                            mainly focus on the Go Ethereum client implementation (com-
+   of peer connections since an earlier attack by Wüst and                                                   monly known as Geth), as this implementation is used by the
+   Gervais [42] in 2016 — i.e., a powerful attack that was once                                               vast majority (80.7%–91.9%1 during the first half of 2022)
+   effective but has been prevented after a quick hotfix [35]. In                                             of Ethereum nodes. Because Gethlighting does not entirely
+   Section V, we demonstrate the feasibility of the Gethlighting                                              rely on the Geth’s specific implementation flaws but also
+   attack through extensive experiments in the Ethereum testnet                                               on the Ethereum protocol design tradeoffs, other Ethereum
+   and mainnet. We launch and confirm full-scale Gethlighting                                                 client implementations could be vulnerable to Gethlighting
+   attacks against some critical nodes in the testnet and our                                                 as well. We conduct a small proof-of-concept experiment
+   own nodes in the mainnet. We also carefully select a few                                                   on OpenEthereum, the second most popular Ethereum client
+   critical nodes actively operated in the mainnet and run a                                                  (6.5% of Ethereum nodes), and demonstrate the attack’s fea-
+   basic attack feasibility test without causing any damage to                                                sibility in Appendix A.
+   them. Since Gethlighting never eclipses any nodes, it renders
+   existing eclipse mitigation techniques, such as manually                                                                              II.    BACKGROUND
+   configuring static peer connections to reliable peers or net-
+   works (e.g., routing-aware peering [38], trusted static peer                                                  In this section, we provide some necessary context for
+   connections [23], a hijacking-resistant relay SABRE [2], or                                                understanding our Gethlighting attack: Ethereum’s peer-to-peer
+   traditional relay networks [16], [18]) completely ineffective.                                             network structure (§II-A), peer message handling logic (§II-B),
+                                                                                                              and gossiping strategies (§II-C).
+2) We conduct an in-depth examination of the low-rate
+   denial-of-service strategy of the Gethlighting attack. In
+   particular, we investigate the per-peer isolation design                                                   A. Ethereum Peer-to-peer Network
+   in the up-to-date Ethereum clients and identify a subtle                                                      Ethereum mainnet consists of thousands of fully-validating
+   scheduling condition that fails a block insertion, which                                                   nodes. By default, each network node makes up to 50 peer
+   is exploited in the Gethlighting attack. In addition, we
+   identify and analyze four more characteristics of the current                                                1 https://etherscan.io/nodetracker
+
+
+
+
+                                                                                                          2
+                      Peer #1                                       Peer #n
+                                                                                                                  III.   T HE G ETHLIGHTING ATTACK
+       Network
+
+
+
+
+                                                      Network
+                                                                                                         In this section, we introduce our Gethlighting attack. We
+                 goroutine #1                                   goroutine #i                        first present the threat model we consider in this paper and
+         P2P                                            P2P                                         explain the four steps of the Gethlighting attack (depicted in
+       message                                 ...    message                                       Figure 3).
+       handler                                        handler
+                                goroutine #2                                   goroutine #i+1
+                                                                                                    Threat model. The attack goal of Gethlighting is to disrupt
+                                   ETH                                            ETH               the chain growth at a targeted Ethereum node for significant
+                                 message                                        message
+                     Go          handler                           Go           handler             amount of time (up to a few hours). The target node is a full
+                   Channel                                       Channel                            node that accepts connections from other Ethereum nodes with
+                                    Golang runtime (scheduler)                                      a public IP address. Gethlighting makes only about a half of
+            Thread #1             Thread #2    ...         Thread #t             Thread #t+1
+                                                                                                    the peer connections of a target node and this requires some
+                                                                                                    inexpensive virtual machines (VMs) in public clouds.
+     Fig. 2: Peer message handling goroutines of Geth.
+                                                                                                        Creating a temporary partition via Gethlighting does not
+                                                                                                    require any mining power at all. Yet, if a Gethlighting ad-
+                                                                                                    versary wishes to create a fork with her own blocks through
+connections, one-third of which are outgoing and the other                                          the last optional Step-Ã, she should have some mining power
+two-thirds are incoming. An Ethereum node selects its outgo-                                        to generate her-own blocks. With some significant mining
+ing peers at random from a list of known addresses provided                                         capacity, an adversary may use Gethlighting as a stepping
+by the Ethereum’s discovery protocol [8]. If a node has                                             stone for other attacks (e.g., double spending [33], stubborn
+already established the maximum number of incoming peer                                             mining [31]), which are out of scope of this paper.
+connections, all subsequent inbound connection requests are
+rejected. Notice that this policy is different from that of Bit-
+coin, which unconditionally evicts a randomly chosen existing                                       A. Step-À: Making Some Connections to the Target
+peer connection to accept a new incoming connection [6].                                                 The Gethlighting adversary uses her VMs as Ethereum
+                                                                                                    nodes and patiently waits to occupy some of the target’s
+                                                                                                    peer connections. Our attack VMs run a slightly modified
+                                                                                                    Geth client to do so. The target Ethereum client may reject
+B. Peer Message Handling Logic
+                                                                                                    our peer connection requests when its inbound connections
+    An Ethereum node communicates with multiple peer nodes                                          are already completely filled with 34 existing inbound peer
+concurrently. Since some peer nodes may have poor per-                                              connections. When an existing benign peer connection is
+formance, or demonstrate selfish behaviors, implementing an                                         disconnected from the target node, our attack VMs have a
+efficient and robust peer message handling is critical.                                             chance to make a connection to the target. Thus, the attack
+                                                                                                    VMs may need to retry to make enough connections to the
+    Geth employs an efficient concurrency model that utilizes                                       target. Since Gethlighting does not require to fully occupy all
+the lightweight threads (i.e., goroutines) in Go language to                                        peer connections, the adversary can choose to stop making
+separate peer connections from each other. Figure 2 shows                                           more connections to the target when the number of peer
+that each peer connection is assigned two goroutines: (1) a                                         connections to the target is considered enough; we show that a
+P2P message handler that receives messages from each peer                                           half of the maximum number of connections (i.e., 25) is a good
+and (2) an ETH message handler that processes the enclosed                                          starting point. We observe that it takes at most a day to occupy
+Ethereum subprotocol messages, if exist.2 An unbuffered Go                                          at least 25 peer connections when targeting critical Ethereum
+channel delivers subprotocol messages between the two mes-                                          nodes in the Rinkeby Ethereum testnet (see Section V-C), a
+sage handling goroutines in a blocking manner.                                                      little longer in the mainnet (see Appendix E).
+
+                                                                                                    B. Step-Á: Causing Mild Disruption to Time out a Block
+C. Gossiping Messages: Unsolicited vs. Solicited                                                        In this step, the attack aims to cause some mild disruption
+                                                                                                    to the target’s block propagation so that a single block is timed
+    Ethereum broadcasts all valid blocks and transactions                                           out at the target node. The target node may miss a few more
+through the entire network via a gossip protocol. When gossip-                                      blocks due to the attack but one missing block is sufficient
+ing about a newly received block or transaction, an Ethereum                                        for the attack. Only a single missing block sufficiently stops
+Geth client uses two different mechanisms: unsolicited or                                           the growth of the local blockchain since the block-level state
+solicited. A Geth node forwards the full block/transaction                                          transition is not commutative in the blockchain model [41].
+content only to a small subset of its neighboring peers, and we                                     Thus, a state replication process at the target should wait for the
+call it unsolicited block/transaction propagation. The
+                                                     √ current                                      single timed-out block before attaching any subsequent blocks.
+Geth implementation chooses a subset of size 7 (= 50 − 1),
+                                                                                                       The disruption should be mild enough so that most of block
+which is decided in a heuristic manner [25]. For the rest of 42
+                                                                                                    propagation (and other Ethereum operations) is unaffected.
+neighboring peers, the Geth node sends a solicited message,
+which contains only the hash of the new block/transaction. The                                        2 An Ethereum P2P message (i.e., DEVp2p) may contain a subprotocol
+receiving peer of the solicited message should actively fetch                                       message such as ETH (Ethereum wire protocol [12]) or LES (Light Ethereum
+the new blocks/transactions from the sender.                                                        subprotocol [10]).
+
+
+                                                                                                3
+ Step-① make some        Step-② disrupt 1+ block receptions                    Step-③ delay bulk block download                Step-④ fork with attack chain
+                                                                                                                                         adversary-generated blocks
+        peer connections         missing
+                                                 block
+                                                                                      Requesting bulk
+  …                                    …             ?                                download for ?
+                     …                                                                               mild disruption
+                                                                                                                               …                ?
+                                                                                            …
+                                                         mild disruption                             Þdelaying bulk
+                      …                          …
+            target                                       Þmissing 1 or few                  …            block download                             immediate insertion
+                     …
+                                        target   …
+                                                                                  target                                                    …
+
+                                                                                                                                                       of adversary-
+                                                 …          block receptions                    …                               target       …
+
+                                                                                                                                            …          generated blocks
+
+
+             Legend for block states:            received and inserted         received but not yet inserted        ? learned but failed to receive
+                                                          Fig. 3: The Gethlighting attack overview.
+
+
+We present a new low-rate denial-of-service (DoS) strategy                            TABLE I: Five key characteristics of Ethereum clients that
+to achieve this. A TX-flooding strategy makes successive                              enable the Gethlighting attack.
+submission of Ethereum transactions, hoping to cause a low-
+rate DoS problem at the target. As the rate of flooding is
+
+
+
+
+                                                                                                                                                                Step-À
+
+                                                                                                                                                                         Step-Á
+
+                                                                                                                                                                                  Step-Â
+low, the target node still behaves normally (e.g., receiving                           Ethereum’s Characteristics
+and processing most of Ethereum messages without noticeable
+delays); however, it fails to process some blocks it receives                          [EC1]    Pretty-Strong-yet-Limited Per-Peer Isolation                             X        X
+from time to time. When the target is under our TX-flooding                            [EC2]    Optimized for Fast and Reliable Block Propagation                        X
+attack, it sometimes causes enough delay (e.g., 5 seconds in the                       [EC3]    Gracious Handling of Invalid Transactions                                X        X
+Geth’s default setting) for processing a newly received block                          [EC4]    Limited Buffer Size for Out-of-order Blocks                              X
+                                                                                       [EC5]    Block Propagation Only via Solicited Messages                   X
+so that the block is timed-out eventually. We show that it is, in
+fact, easy to induce such a mild DoS in the target’s message
+processing routine by sending a batch of Ethereum transactions                        that they are accepted by the target without experiencing any
+that are all eventually invalidated by the target node. Due                           delays. As a result, the adversary’s chain becomes the longest
+to the Ethereum clients’ resource management scheme (see                              branch from the target’s perspective as long as the missing
+Section IV-A), the target sometimes misses a block.                                   blocks are not yet downloaded.
+
+C. Step-Â: Delaying Bulk Block Downloads                                                               IV.    T ECHNICAL U NDERPINNINGS
+
+    Once a single block reception has timed out at the target                             In this section, we discuss five technical characteristics
+node, its chain growth stops because the missing block pre-                           (which we label as [EC] —Ethereum Characteristics) of the
+vents all subsequently received blocks from being chained back                        Ethereum client design and implementation that enable our
+to the genesis block. To retrieve the missing block, the target                       Gethlighting attack. Each of them is discussed in detail in
+now begins the bulk block download process3 as the last resort                        each subsection. We use the term “characteristics” instead of
+of retrieving the missing block. The bulk download mechanism                          “vulnerabilities” because they are carefully designed, critical
+in Ethereum is designed for the recovery of major delivery                            system features for addressing the Ethereum network’s effi-
+failures or initial block downloads. Thus, it is optimized for                        ciency, robustness, and security challenges.
+downloading a long sequence of blocks and catching up the                                Table I summarizes how each Ethereum’s characteristic
+synchronization with other peers.                                                     contributes to the corresponding attack steps.
+    The TX-flooding strategy is used in Step-Â as well to
+keep delivering some workload and mildly burden the target                            A. [EC1] Pretty-Strong-yet-Limited Per-Peer Isolation
+node. This renders the retrieval requests to fail even when                               A blockchain node communicates concurrently with mul-
+asked to a benign peer. In particular, the bulk block download                        tiple peer nodes. One ideal property for multi-peer scheduling
+routine can be executed multiple times, making it hard to get                         in blockchains would be a strong per-peer isolation between
+out of the recovery mode of the target node. We show that                             peers at a local node. Without proper isolation between peers,
+the block delivery can be, therefore, delayed for up to a few                         malicious peers may cause an adverse effect on the delivery
+hours with this strategy.                                                             and processing of messages (e.g., new block information) from
+                                                                                      other benign peers.
+D. Step-Ã: Forking with an Attacker-Mined Chain
+                                                                                      Strong per-peer fairness. Our thorough analysis of Geth
+    While the target node is partitioned from the rest of                             (version 1.10.20) shows that its concurrent message handling
+the Ethereum network, our Gethlighting adversary can also                             logic for serving multiple peers achieves, in fact, strong per-
+reliably feed the full copies of her own mined blocks to the                          peer fairness. That is, each user connection is guaranteed to
+target. The adversary-generated blocks are sent to the target                         have its fair share bandwidth of the resources at the target node.
+as whole blocks (i.e., unsolicited block delivery) to ensure                          Several careful design choices found in the Geth’s message
+   3 The official name of this process is block synchronization. In this paper,
+                                                                                      handling logic make it fair across peers:
+we call it a bulk block download to better highlight its download design and          (i) No shared queues between peers. All network protocol and
+differentiate it from the regular block propagation process.                              application buffers are separately provided for each peer
+
+                                                                                  4
+   A benign peer’s
+   message arrivals
+                                                                                       is that the service rate µ is bounded to 1/(k × s) with TX-
+                                                                           time
+                                                                                       flooding by a Gethlighting adversary, where k is the number
+ Goroutine scheduling                                                                  of Gethlighting peers divided by the number of CPU cores of
+w/ no Gethlighting peers
+                                                                                       the target and s denotes a system parameter for the maximum
+                                                                           time
+ Goroutine scheduling
+                                                                                       time bound for each scheduling; 20 msec measured in Geth.
+w/ 5 Gethlighting peers                                                                Figure 4 illustrates a simplified example of this: The fifth
+        per CPU
+                            5 slots
+                                                                           time        message (blue arrow) from the benign peer is handled with a
+                                           delay
+ Goroutine scheduling                                                                  significant delay in the presence of 10 Gethlighting peers (per
+w/ 10 Gethlighting peers                                                               CPU) because each Gethlighting peer occupies the entire time
+        per CPU
+                              10 slots              delay
+                                                                           time        slot (i.e., 20 msec) of its fair share of scheduling, rendering
+                                                                                       200 msec (i.e., 10 × 20 msec) serving as the minimum inter-
+Fig. 4: A simplified illustration of goroutine scheduling in one                       service time of benign peer messages. It should be noted that
+CPU core during the Gethlighting attack.                                               attack peers cannot indefinitely delay benign peer’s messages
+                                                                                       or take more scheduling opportunities than their fair share.
+    connection. Ethereum messages from each remote peer are                                The bounded service rate induced by a Gethlighting adver-
+    handled by two dedicated goroutines, providing a separate                          sary renders delayed message delivery when messages arrive
+    message buffer for each (see Figure 2).                                            more frequently (than the bound). A local node’s fetch timer,
+                                                                                       which is set up for a specific request to a remote peer, expires
+(ii) Round-robin scheduling. The message handling goroutines
+                                                                                       because the response message experiences a long queuing
+    are scheduled by the Go runtime scheduler in a round-robin
+                                                                                       delay (as depicted in Figure 4) inside the local node.
+    fashion as each CPU has its own FIFO local run queue
+    (LRQ) from which goroutines in ready are dispatched for                                From our back-of-the-envelop calculation of the required
+    execution.                                                                         number of attack peers for TX-flooding, we learn that with
+(iii) Preemptive scheduling. The Go runtime scheduler imple-                           20 attack peers against a target node with 4 CPUs (thus, k =
+    ments a preemptive scheduling. That is, a message handling                         20/4 = 5) any benign peer with message rates higher than 10
+    goroutine is preempted by the blocking I/O (i.e., waiting                          messages/s would experience delays in their message handling
+    for the next message to arrive) or by reaching its typical                         at the target. This result is well aligned with our main evalu-
+    time-quantum of 20 msec.4                                                          ation of the TX-flooding strategy discussed in Section V-A.
+
+This strong per-peer fairness in Geth makes it highly robust to a                      B. [EC2] Optimized for Fast and Reliable Block Propagation
+wide range of denial-of-service (DoS) attacks; see our exhaus-
+tive experiments in Section V-A, which shows that flooding                                 Fast and reliable block propagation — i.e., the process
+with various Ethereum message types are all ineffective, except                        of disseminating newly mined blocks to the entire network
+the proposed TX-flooding attack. Per-peer fairness in Geth                             nodes — is crucial for blockchains. This is particularly true for
+provides pretty strong isolation because it offers the guaranteed                      Ethereum as its blocktime (12–14 seconds) is more than an
+message handling performance per peer that is lower-bounded                            order of magnitude shorter than that of its main competitors
+by the total number of messages sent to a target Geth client di-                       (e.g., 10 minutes in Bitcoin). Thus, the Ethereum protocol
+vided by the number of all peers (e.g., maximum 50 in the de-                          and client implementations have continuously evolved over
+fault setting).5 This means that an adversary’s effect on the tar-                     time to optimize for fast block propagation, and the current
+get is bounded by the number of peer connections she controls.                         Ethereum blocks propagate to 90% of peer nodes in less than
+                                                                                       1.5 seconds [15].
+When per-peer fairness isn’t enough. Our TX-flooding at-
+tack demonstration, however, shows that the current Geth’s per-                             Let us summarize two layers of optimizations for fast and
+peer fairness policy and the default parameters for peers and                          reliable block propagation in Ethereum:
+their messages still allow a certain type of denial-of-service                         1) Asking only one peer for a full block. A Geth client
+attacks. Let us get into some more details and understand                                 batch-processes multiple messages for the same solicited
+why per-peer fairness is not strong enough to address the TX-                             block delivery that have been received within a 0.4-second
+flooding attack, unfortunately.                                                           time window.6 When asking for a full block information,
+                                                                                          a client node sends a request only to one peer from each
+    Incoming peer messages accumulate waiting time in the                                 batch. This removes any duplicate download of full block
+queue if the arrival rate λ (i.e., the rate at which messages are                         information from two or more peers, thus minimizing the
+sent from the remote node) exceeds the service rate µ (i.e.,                              network bandwidth for block propagation.
+the rate at which messages are processed at the local node).
+                                                                                       2) Limiting retrials for a new block. When a request for
+In normal cases, µ (per a normal peer connection) depends
+                                                                                          a solicited block is unanswered within a timeout (e.g., 5
+on the local node’s system performance and the amount of
+                                                                                          seconds6 in the current Geth version 1.10.20), it is consid-
+work that should be done for those messages. The problem
+                                                                                          ered failed and the entire batch of solicited announcements
+   4 A goroutine that runs for 10 msec is labeled preemptible, and the actual             are discarded. The requesting peer may retry downloading
+scheduling-out process takes place later, once a few more conditions are                  the same block with another batch of solicited announce-
+satisfied. We observe that the actual time slot durations are very close to               ments that came after the first batch; however, the retries
+an average of 20 msec via our execution tracing in Appendix D.
+   5 Because the message handling goroutines are scheduled in a round-robin               6 See Appendix F for the hard-coded timeout values in Geth. It is
+fashion, at least 1/n of the time is guaranteed to be spent serving one specific       also discussed why simply increasing the timeout value is not an effective
+peer’s messages, where n is the number of peers.                                       countermeasure against Gethlighting.
+
+
+                                                                                   5
+  are practically limited only to a couple times 7 because                       gracious handling policy. That is, as long as a transaction
+  the Ethereum network is fast enough to finish a block                          is syntactically correct, it never penalizes peers for sending
+  propagation in 1-2 seconds. This particular policy has been                    invalid transactions. Instead, Ethereum decides to handle all
+  deployed to protect peers from a form of denial-of-service                     (both valid and invalid) transactions as efficiently as possible
+  attacks [9]. That is, by limiting the number of retrials, a peer               so that peer nodes do not experience disruptions due to invalid
+  node can ignore most of the maliciously repeated solicited                     transactions.
+  announcements for the same hash of a non-existent block.
+                                                                                     There exists, in fact, a good reason for this Ethereum’s
+Note that these optimizations have been evolved over time and                    generosity towards invalid transactions. In an account-based
+work nicely for most cases. We argue that these optimizations,                   model, it is often uncertain whether an invalid transaction
+however, unfortunately make Ethereum clients vulnerable to                       is sent with a malicious intent or not. One clearly invalid
+our Gethlighting attack by helping a Gethlighting adversary                      transaction in a node may be considered valid in another node
+easily make Ethereum clients miss a single block reception.                      with a different blockchain state. As temporary forks exist in
+                                                                                 the Ethereum blockchain network, one cannot easily conclude
+    As a result of these optimizations, an Ethereum peer                         that the sender (or forwarder) of an invalid transaction has a
+node has only a couple of chances of receiving a full block                      malicious intent behind it. For example, an Ethereum node,
+in its initial propagation phase (i.e., a few seconds after its                  which is synchronized up to the block height h, may prop-
+creation), as we empirically confirm in Appendix B. Missing                      agate a transaction t that is believed to be valid. However,
+this scant opportunity, a node should later rely on the bulk                     another node that is one block behind (i.e., synchronized up
+download of blocks, which involves much more expensive                           to h − 1) may conclude that t is invalid. As seen in the
+interactions with its peers.                                                     example, it is inappropriate to hastily blame and penalize
+    Let us provide some more details. When the existence of a                    a peer for sending invalid-looking transactions because it
+new block is informed, block_fetcher in Geth collects all                        can be a perfectly honest, protocol-abiding peer that believes
+the announcements with the same block hash from different                        the validity of the transactions. Ethereum chooses to handle
+peers for 0.4 seconds. After gathering the batch, one request                    such transactions graciously and completely avoid penalizing
+for the block header is sent to a single peer that is selected                   potentially benign peers. Our Gethlighting attack exploits this
+at random. If the request is not answered within the 5-                          very policy decision.
+second timeout window, all the announcements in the batch are
+discarded together. Ethereum network is known to be highly                       D. [EC4] Limited Buffer Size for Out-of-order Blocks
+efficient in block propagation (e.g., more than 80% of nodes                          Our Gethlighting attack in Step-Á actively triggers a target
+receive a new block information within 1-second window since                     node to miss only one or few blocks while allowing most or all
+the block creation [15]) and thus a peer node typically collects                 subsequent block propagation. This causes blocks arrive out-
+only a couple of batches of solicited announcements after all!                   of-order at a target node and then all received blocks after the
+                                                                                 first missing block are sent to a local buffer, waiting for the
+C. [EC3] Gracious Handling of Invalid Transactions                               missing block to be downloaded. Buffering out-of-order blocks
+                                                                                 saves time for re-downloading out-of-order blocks because
+    In blockchains, when transactions are deemed invalid, they                   all the buffered blocks can be immediately inserted to the
+ought to be ignored and dropped by peers as early as possible                    blockchain as soon as the missing block is downloaded. The
+in a system. A transaction is said to be syntactically invalid                   larger the buffer size for out-of-order blocks, the faster a target
+when it has missing fields, wrong signatures, or incorrect                       node can recover from our Gethlighting attack.
+proof-of-work. In contrast, a semantically invalid transaction
+has an instruction (e.g., transferring ETH from one account                          However, the buffer size should not be set too large due
+to another) that is considered unacceptable according to                         to the risk of denial-of-service attacks; e.g., a perpetrator
+the canonical chain and other transactions stored in a node.                     may overflow the buffer capacity with many out-of-order
+For example, a transaction that spends some ETH from a                           blocks. The current Geth implementation stores up to 32
+zero-balance account is considered semantically invalid. The                     out-of-order blocks. Due to this limited buffer, when the
+Gethlighting attack sends many such syntactically-correct-                       Gethlighting attack successfully delays the download of a
+yet-semantically-invalid transactions to a target node for                       single block more than 6.5 minutes (i.e., about 32 block
+TX-flooding.                                                                     times), out-of-order blocks start to drop at a target node.
+                                                                                 This means that some out-of-order blocks are not ready in
+    We find that this is possible due to the policy of gracious                  the target node at the time when a missing block is finally
+handling of invalid transactions, which is a distinctive policy                  downloaded and they need to be downloaded again.
+found in Ethereum. A not-so-gracious handling of invalid
+                                                                                 Back-to-back bulk block downloads. This small buffer size
+transactions (found in Bitcoin) would penalize the peers that
+                                                                                 can potentially put the target node into a series of back-to-
+send such invalid (despite their syntactic correctness) trans-
+                                                                                 back bulk block downloads (as in Step-Á), further extending
+actions. A strict handling of invalid transactions could even
+                                                                                 the partitioning attack. At first, one missing block due to
+disconnect a peer when it sends any invalid transactions.
+                                                                                 Gethlighting causes to drop some out-of-order blocks. Then,
+Ethereum, however, explicitly refuses to employ any penalty
+                                                                                 when the missing block is received, a target node often re-
+for sending such invalid transactions but implements the
+                                                                                 enters the bulk block download phase because it has dropped
+   7 It is determined by how widely distributed the new block announcement       some of the more recent out-of-order blocks. This can repeat
+arrivals (from neighboring peers) are. See Appendix B for the empirical          multiple times, rendering the target node to experience multiple
+distribution.                                                                    rounds of delayed bulk block downloads.
+
+                                                                             6
+                                                                         Cumulative distribution function
+E. [EC5] Block Propagation Only via Solicited Messages                                                       1
+
+    The current Geth node delivers a newly received block                                                   0.8
+to only a small number of neighboring peers unsolicitedly
+(see its definition in Section II-C). The Gethlighting attack                                               0.6
+works when a target node receives a new block exclusively                                                                             10 TX-flooding peers
+                                                                                                            0.4                       15 TX-flooding peers
+via solicited messages. This is when the target receives only                                                                         20 TX-flooding peers
+                                                                                                            0.2                       25 TX-flooding peers
+the hash of the new block (via solicited messages) from all its                                                                       30 TX-flooding peers
+peers but no full-block information (via unsolicited messages).                                                                       35 TX-flooding peers
+                                                                                                             0
+Such solicited-only block propagation happens quite frequently                                                    1    10          100           1000        10000
+to any node in Ethereum and thus our Gethlighting can oppor-                                                          Block insertion delay (seconds)
+tunistically attack any target node without waiting too much.
+                                                                        Fig. 5: Block insertion delays experienced by a target node
+    The probability that a target node receives solicited               under TX-flooding attacks.
+block  messages   from all n peers can be modeled as
+Πni=1 1 − √m1 −1 , where mi denotes the number of peer                  Common attack setup. We implement Gethlighting at-
+                i
+connections of the target’s peer i among all n peers with               tack strategies by adding approximately 200 source lines of
+some simplifying assumptions (e.g., all peers are always ready          code (SLOC) to the official Ethereum implementation, Geth
+to relay up-to-date blocks). By default, a Geth node makes              v1.10.20. The essential attack logic is embedded in only 20
+peering with up to 50 other Ethereum nodes (i.e., n = mi = 50           SLOC. For TX-flooding attacks, we generate a transaction
+for all i); however, as a Gethlighting adversary controls one or        journal file, comprising 96,000 invalid transactions transferring
+more peers of a target Geth node and does not send unsolicited          1 ETH from a zero-balance account to another account, in
+messages through them, the effective n for the probability              advance and input during Geth’s bootstrapping.
+decreases to the number of benign peers of the target. For ex-              Four t2.large instances, having 2 × Intel CPUs, 8 GB
+ample, when a target has 25 attack peer connections (n = 25),           memory, and 100 GB general purpose HDD storage each, are
+the probability that a new block is received exclusively via            provisioned to accommodate up to 40 attack nodes (i.e., 10
+solicited messages becomes 2.12% and it increases to 8.48%              adversarial Geth processes per each VM). Gethlighting client
+when the target has 34 attack peers (n = 16). Although the              nodes utilize only little resource footprint since they can stay
+probability for a single block still seems low, a Gethlighting          nearly dormant, with the exception of 15-second periodic ping-
+adversary can wait for several new blocks until the target node         pong, without worrying about being disconnected from the
+eventually receives a block exclusively via solicited messages.         attack target. See Appendix G for more discussion on this.
+The expected waiting time to the first solicited-only block
+propagation at the target is 8.67 minutes (about 47 blocks)             A. Controlled Mainnet Experiments and In-depth Analysis
+for a target with 25 attack peers and 2.36 minutes (about 12
+blocks) for a target with 34 attack peers.                                   We first test the Gethlighting attacks in a safe, controlled
+                                                                        setup where all the targets are under our control. To make our
+    In theory, if a target Geth node is modified to have                attack targets have realistic internal states, we let our attack
+more than the default 50 peer connections [11], n increases             target nodes connect to the Ethereum mainnet and receive
+accordingly and the above probability diminishes, which would           transaction and block information from it (but not sending any
+increase the time till the Gethlighting attack triggers Step-           to the mainnet). Our target node is hosted by an Amazon EC2
+Á. However, in practice, Gethlighting is still effective against        i3.xlarge instance, which satisfies the recommended hard-
+target nodes with more than 50 peer nodes because not                   ware specifications from the official Ethereum foundation8 ;
+all peers are always ready to forward new blocks in the                 i.e., 4 × Intel Xeon CPUs @2.3Ghz, 30.5 GB memory, and
+real Ethereum networks; see our empirical evaluation in the             1 TB NVMe SSD storage.
+mainnet (Section V-A) and testnet (Section V-C).
+                                                                            We launch six independently executed experiments of
+                                                                        Gethlighting with the different numbers of malicious peers.
+        V.   M AINNET AND T ESTNET E XPERIMENTS                         Each experiment is performed for 24 hours after synchronizing
+                                                                        recent blocks in the target node and connecting all adversarial
+    This section lists our extensive experiment results of the
+                                                                        nodes to the target.
+Gethlighting attacks. We first conduct safe, isolated experi-
+ments with our own Ethereum mainnet client nodes for in-                    Figure 5 shows the cumulative distribution of block inser-
+depth analysis of the proposed attack (§V-A). Extending this            tion delays at the target node. With 10 attacker’s connections,
+attack, we attempt to inject adversary-mined blocks to our              97% of blocks are inserted in less than 100 seconds since
+own target nodes while Gethlighting them (§V-B). We then                their creation. This decreases to 85% when Gethlighting makes
+conduct our full-scale Gethlighting attacks against several             15 connections. Also, we observe the maximum delay of
+important nodes in the Ethereum testnets and confirm its                1,400 seconds with 15 Gethlighting peers. When we utilize
+real-world impact (§V-C). Finally, we test the feasibility of           35 peers for TX-flooding, 31% of blocks experience longer
+Gethlighting against the real-world important nodes in the              than 100-second delay, and the maximum we observe reaches
+Ethereum mainnet (§V-D).                                                4,663 seconds. To sum, we empirically demonstrate that as
+                                                                        more attack nodes are used for TX-flooding attacks, a longer
+    In all our evaluations, we carefully design and execute these       partitioning duration is expected.
+experiments to minimize potential negative impact (if any) on
+the Ethereum mainnet (§V-E).                                                            8 https://ethereum.org/en/developers/docs/nodes-and-clients/
+
+
+
+
+                                                                    7
+ Cumulative distribution function
+
+
+
+
+                                                                                                      Cumulative distribution function
+                                     1                                                                                                    1
+
+                                    0.8                                                                                                  0.8
+
+                                    0.6                                                                                                  0.6
+                                                                       Without attack
+                                    0.4                                   NewBlock                                                       0.4
+                                                                      BlockHeaders                                                                                 10 TX-flooding peers
+                                    0.2                                BlockBodies                                                       0.2                       15 TX-flooding peers
+                                                                          Receipts                                                                                 20 TX-flooding peers
+                                                                      Transactions                                                                                 30 TX-flooding peers
+                                     0                                                                                                    0
+                                          0   50        100     150      200         250   300                                             0.01   0.1       1     5 10      60 100        1000
+                                                   Block insertion delay (seconds)                                                                Message completion time (seconds)
+Fig. 6: Block insertion delays experienced by a target under                                         Fig. 7: Completion time for benign peer messages. Two
+low-rate DoS attacks with various Ethereum messages. Our                                             timeout values for Step-Á and Step-Â are indicated by two
+TX-flooding strategy (i.e., low-rate DoS with transactions)                                          red vertical lines.
+clearly stands out. We show only the top five most effective
+Ethereum messages; all others make worse attacks.                                                    amount of time it takes from start to finish (i.e., from the time
+                                                                                                     the message is sent from a remote node until it is completely
+                                                                                                     processed by the target node). We find that when there are
+How is TX-flooding different from naı̈ve DoS attacks? Our                                            more TX-flooding peers, it takes longer to process an Ethereum
+choice of Ethereum transactions (hence called ‘TX’-flooding)                                         message (e.g., informing new blocks and transactions). As a
+among many other Ethereum message types (e.g., informing                                             result, some of those messages are not delivered before the
+a block, requesting or responding block parts) for our attack                                        expiration of our attack’s two critical timers (Section III): A
+strategy may seem like an arbitrary decision; however, it                                            5-second timer expiration (see a red vertical line at 5 sec in
+is our deliberate, well thought-out design choice. Here, we                                          Figure 7) in retrieving single block information is an important
+empirically show this.                                                                               triggering event in accomplishing Step-Á. If a request for bulk
+                                                                                                     block information is not responded to within the estimated
+    We first implement many different types of DoS attacks                                           round-trip time (e.g., one minute10 ), the retrieval request fails
+with different Ethereum message types. To be specific, we                                            in Step-Â (see another red vertical line at 60 sec in Figure 7).
+execute simple back-to-back message flooding attacks with                                            The failed request is then forwarded to other peers, increasing
+a comprehensive set of the up-to-date Ethereum message                                               the total partitioning duration. Our detailed analysis of why
+types (i.e., ETH/679 ). A set of attack payloads comprising                                          such delay occurs for our TX-flooding is found in Appendix D.
+all 13 message types are pre-generated synthetically to meet
+the message size limit of 10 MB for a fair comparison                                                    Figure 7 also supports our claim of mild disruption via
+with our TX-flooding attack. Message types Status and                                                TX-flooding. As shown in the figure, Gethlighting does not
+GetBlockHeaders are the only exceptions because the                                                  interfere with the processing of benign messages to the extent
+Ethereum protocol does not allow us to fill up a 10 MB                                               that the majority of benign messages miss the target’s pro-
+message with these message types.                                                                    cessing deadlines. Only a small fraction of benign messages
+                                                                                                     violate the timeout; for example, approximately 10% or less
+    Figure 6 shows the cumulative distribution of block inser-                                       of benign messages violate the 60-second timeout in all attack
+tion delays at the target node when under various DoS attacks                                        configurations and only about 2% violate the 5-second timeout
+we test. Our TX-flooding is evidently far more effective than                                        when attacking with 15 peers.
+all other DoS attacks with different message types, making it
+the only effective flooding attack vector for our Gethlighting                                       Attacking a target modified to have more than 50 peers? A
+attacks. Note again that all these other flooding attacks also                                       modified target Geth node can make more than 50 (i.e., default
+send the same size (i.e., 10 MB) messages to the target but                                          maxpeers value) peer connections. First of all, having more
+they cause only a marginal impact on block insertion. See                                            peer connections at a target does not reduce the Gethlighting
+Appendix C for details.                                                                              attack strength because the delay in handling messages only
+                                                                                                     depends on the number of attack peers, not benign ones.
+Why the more attack connections, the longer partitioning?                                            However, the overall attack effectiveness can be diminished
+To find out what really causes the trend in Figure 5 (i.e., the                                      because it becomes harder to trigger the condition for Step-Á
+more attack peers, the more powerful attacks), we conduct                                            in Gethlighting when the target has more benign peers that can
+additional controlled experiments. For controlled experiments,                                       send unsolicited blocks (see Section IV-E).
+unlike the ones in Figure 5, we directly manage both the benign
+and malicious peers of a target. We set the number of benign                                            To measure the reduced attack effectiveness with targets
+peer connections to 5 while we run 8 independent executions of                                       with more peers, we launch three independently executed
+TX-flooding attacks with 5 to 40 (with a step of 5) Gethlighting                                     experiments of Gethlighting by configuring the target Geth
+peers for a 1-hour period.                                                                           node’s maxpeers to 50 (default), 100, and 200. The cu-
+                                                                                                     mulative distribution of block insertion delays (collected for
+    Figure 7 depicts the distribution of Ethereum message                                            24 hours) in Figure 8 shows that the Gethlighting attack is,
+completion times for benign peers during each controlled                                             by and large, highly effective against all target clients with
+attack execution. The message completion time quantifies the
+                                                                                                       10 We observe that the value is set close to one minute regardless of the
+            9 https://github.com/ethereum/devp2p/blob/master/caps/eth.md                             actual network round-trip time, which is far smaller.
+
+
+                                                                                                 8
+ Cumulative distribution function
+                                     1                                                                                                       Canonical blocks                  Adversary’s blocks
+
+
+
+
+                                                                                             Block insertion delay (seconds)
+                                                                                                                               1600
+                                    0.8                                                                                                     Adversary’s blocks are leading
+                                                                                                                               1200
+                                                                                                                                                                             Canonical blocks are leading
+                                    0.6
+                                                                                                                               800
+                                    0.4                         Without attack
+                                                              maxpeers=200
+                                    0.2                       maxpeers=100                                                     400
+                                                      (default) maxpeers=50
+                                     0                                                                                           0
+                                          1    10          100          1000     10000                                                0           2000            4000        6000            8000          10000
+                                              Block insertion delay (seconds)                                                                                      Time (seconds)
+Fig. 8: Block insertion delays under TX-flooding attacks with
+                                                                                             Fig. 9: Adversarial fork with Gethlighting attack. Adversary’s
+configuring maxpeers to 50, 100, and 200 at the target.
+                                                                                             blocks (red) are instantly accepted while canonical blocks
+                                                                                             (green) are delayed due to a TX-flooding attack.
+different maxpeers. The overall delay is somewhat decreased
+with more numbers of peer connections as the median block
+insertion delays are 85, 17, and 15 seconds for 50, 100, and 200                             ately by the target node when it is partitioned by our Gethlight-
+maxpeers, respectively. However, the maximum block inser-                                    ing attack. This is because these blocks are delivered to the
+tion delays (i.e., the worst-case partitioning duration) are 4,663,                          target in an unsolicited manner always. Note that adversary’s
+2,502, and 6,892 seconds for 50, 100, and 200 maxpeers,                                      leading cannot persist without partitioning as we assume the
+respectively, showing the effectiveness of partitioning attacks                              adversary possesses less than 50% of the mining power.
+across all maxpeers setups. The fraction of blocks that are
+delayed for more than 10 minutes is roughly 8% across all                                    C. Real-World Experiments in a Testnet
+configurations, too.
+                                                                                                 For our first real-world experiments, we conduct the full-
+    Our empirical analysis shows that it is the reduced fre-                                 scale of Gethlighting in the Rinkeby Ethereum testnet. Instead
+quency of Step-Á events that degrades the attack effectiveness.                              of testing TX-flooding attacks against any testnet nodes se-
+Our log of Step-Á events (i.e., missing one block) at the target                             lected at random, we carefully choose and target critical nodes.
+shows that 1.12%, 0.59%, and 0.38% for targets with 50, 100,                                 We believe our experiment is conservative and shows the real
+and 200 maxpeers, respectively, which makes it harder to                                     risk in the testnet because these critical nodes are more likely
+attack them.                                                                                 to apply additional security measures than the average nodes.
+    We find that our actual mainnet experiments above show                                   Discovering critical nodes in a testnet. We are inspired
+much better attack performance than what our analytical model                                by the work by Li et al. [27] as we define and search for
+predicts; that is, in theory, we expect near zero probabilities                              critical Ethereum nodes. We first operate several supernodes
+of Step-Á when targets are configured maxpeers=100 or                                        that collect an extensive set of node addresses and client IDs of
+200, which shows a clear difference from reality. Through                                    neighboring peers in both Ethereum mainnet and testnet (i.e.,
+observation, we find that the actual number of peers that deliver                            Rinkeby). As for the Rinkeby testnet, we discover the node ad-
+unsolicited block messages (denoted n in Section IV-E) can                                   dresses of additional critical nodes (i.e., bootnodes11 and min-
+be much smaller in practice. One reason is that a quarter of                                 ers12 ) by matching our address collection to the known profiles
+the Ethereum mainnet nodes are not able to validate (and                                     of registered network nodes [1]. Total 2 RPC services, 1 miner,
+thus relay) recent blocks because they are simply not yet                                    and 2 bootnodes are found in the Rinkeby Ethereum testnet.
+synchronized [14]. Moreover, it is widely known that many
+protocol-deviating client implementations (such as passive                                   Testnet results. We launch full-scale Gethlighting attacks
+monitoring supernodes [4], [26], transaction spammers [24],                                  against the discovered critical testnet nodes. We wait until at
+and conceivably sybil nodes [7]) do not dutifully participate                                least 25 Gethlighting peers are connected to each attack target,
+in the Ethereum’s block propagation.                                                         which takes about one day or less. Then, we carry out the
+                                                                                             attacks for six hours and record the maximum block insertion
+                                                                                             delay observed in the six-hour period. Since the target nodes
+B. Controlled Mainnet Experiments with Temporary Forks                                       are not under our control, we measure the block insertion de-
+    Confirming the effective Gethlighting against our own                                    lays indirectly. That is, the block insertion time (at the target) is
+nodes, we attempt to inject adversary-mined blocks to our                                    estimated indirectly with a NewBlock or NewBlockHashes
+targets. Since we do not have significant mining power for our                               message, as a consequence of the target’s inception of a new
+adversarial fork experiment, we modify the adversary’s mining                                block, received by our own Gethlighting peers. We find that
+routine so that she regularly publishes a new block every other                              the error due to our indirect measurement should be marginal
+minute (i.e., assuming 10% hash power) without a valid PoW                                   with the block insertion delay measurements in the order of
+proof. Our attack target node also skips the PoW verification                                hundreds to thousands of seconds.
+for adversary’s blocks.                                                                         Table II summarizes our attack results. We observe that
+   An adversary’s mining node is connected to the target                                     Gethlighting partitions the discovered critical nodes for more
+with 32 Gethlighting peers to demonstrate how effectively                                                          11 Bootstraping             nodes [11].
+adversary-mined blocks are accepted by a target node. Figure 9                                                     12 Rinkeby             testnet miners are also called signers of the Proof-of-Authority
+shows that the adversary-mined blocks are accepted immedi-                                   network [36].
+
+
+                                                                                         9
+TABLE II: Critical testnet nodes we target in our experiments.                                                                TABLE III: List of critical mainnet nodes we test.
+All codenames and registered names are anonymized.
+                                                                                                                                                                 # of   Valid txid
+                                                                                                                                    Client-codename    Kind
+                                                                                                                                                                nodes      prefix
+   Client-codename                                                  # of             # of         Max block
+ (or registered name)                       Kind                   nodes            attack         insertion                        Geth-E***          Miner     18     0xe64630
+ {# of peers}, if avail                                           (tested)          conns            delay                          Geth-E***          Miner      3     0x336fae
+                                                                                                                                    Geth-E***          Miner      2     0x9ab8c0
+ Geth-o***                                RPC                      39 (3)           28–34      9,092–9,560 sec                      Geth-e***          Miner      1     0x43ea7b
+ Geth-d***                                RPC                        1                32          2,529 sec                         Geth-c***          Miner      1     0xfb90a5
+ I*** signer                             Miner                       1                14           280 sec
+ I*** bootnode {421}                    Bootnode                     1                40          4,153 sec                         Geth-o***          RPC       63     0xd21bf1
+ A*** bootnode {327}                    Bootnode                     1                40          2,891 sec                         Geth-A***          RPC       18     0x4d8d64
+ Geth-P***                              Unknown                      1                40          4,292 sec                         Geth-M***          RPC        6     0x6f9017
+ Geth-l***                              Unknown                      1                28          3,686 sec                         Geth-a***          RPC        3     0xe4ecd0
+ Geth-S***                              Unknown                      1                40          1,269 sec                         Geth-I***          Misc      1      0x96ece0
+                                                                                                                                    Geth-k***          Misc      1      0xd0ffe8
+                                                                                                                                    Geth-m***          Misc      1      0xe92dd9
+                                                                                                                                    Geth-W***          Misc      1
+
+                               …
+                   Gethlighting payload (10MB)            valid transaction                                                                                             0x15b684
+                            invalid transactions                                    Ethereum Mainnet
+                                                                                                                                    Geth-p***         Unknown    4      0x0b884d
+                                                             𝑡!
+Probing Node                                                              Target Node                  Monitoring
+                                                                                                         Service
+     P                                                                          T            …         M   Node
+                                                                                                                         D. Real-World Mainnet Experiments
+                     Test if mainnet Ethereum nodes
+                       filter Gethlighting payload?             Front-end                                                    Finally, we test the Gethlighting attack against third par-
+                                                               network filter
+                               Evidence of filter:   𝑡!   or not
+                                                                                                                         ties’ critical nodes in the Ethereum mainnet. For obvious
+         control
+                                                                                                                         ethical concerns, we do not, however, conduct the full-scale
+              Experimenter                                                                                               Gethlighting attacks against the real-world mainnet nodes that
+                                                                                                                         are operated by others. Hence, our mainnet experiments are
+Fig. 10: Safely testing the existence of network filters for                                                             inherently limited.
+Gethlighting attack payload in the Ethereum mainnet. In all
+our mainnet experiments, the single valid transaction (tv ’s) we                                                         Why mainnet critical-node experiments? So far, we have
+insert into payload are found in the Ethereum blockchain,                                                                demonstrated the effectiveness of Gethlighting against our
+which shows the non-existence of such filters.                                                                           own mainnet nodes or the nodes in a testnet. However, it
+                                                                                                                         is insufficient to show the feasibility of the attack against
+                                                                                                                         the real-world mainnet targets because the service operators
+                                                                                                                         of critical real-world mainnet nodes may have deployed a
+than a thousand seconds in most cases. We confirm that                                                                   front-end network filter (e.g., intrusion detection or prevention
+partitioning for more than a few hours is indeed possible. Par-                                                          system [28]) that removes our attack payloads (i.e., TX-
+ticularly, the RPC service nodes (identified by the codename                                                             flooding messages). To rule out these possibilities of such
+o***) are badly damaged by Gethlighting. I*** signer node                                                                network filters and confirm the feasibility of Gethlighting in
+is the only experiment target we do not observe significant                                                              the mainnet, we test whether the Gethlighting attack payloads
+partitioning. It is clearly partitioned but no more than 5                                                               successfully reach real-world critical Ethereum nodes in the
+minutes.                                                                                                                 mainnet; see below for more details.
+
+    Since these target nodes are not under our control, our post-                                                        Discovering critical nodes in the mainnet. As we explain
+mortem analysis is, unfortunately, limited. Yet, we provide a                                                            earlier in this section, we operate our own supernodes to
+few best guesses of ours about these testnet target nodes: (1)                                                           discover critical nodes in the mainnet. We identify more than
+Many critical service nodes (e.g., codename o***) seem to use                                                            25K unique peers in the mainnet for a month. We discover 4
+mediocre-performing servers (thus vulnerable to Gethlighting).                                                           RPC services and 5 mining nodes in the Ethereum mainnet by
+(2) Some critical nodes (e.g., I*** signer) appear to use a                                                              analyzing the client codenames we collect [27].
+modified peer management logic, which (probably unknow-                                                                  Safely testing the existence of filters in the mainnet. We
+ingly) makes them more robust to Gethlighting. For instance,                                                             devise the following probing technique to test whether our
+the I*** signer node tends to disconnect all peers (even benign                                                          Gethlighting attack payloads reliably reach real-world target
+ones) unconditionally every five minutes; hence, the average                                                             nodes in the mainnet or are filtered out by a front-end security
+number of connections made to the node is only 14. This also                                                             system. In Figure 10, a probing node P (e.g., a customized
+shows that the targets’ system performance and protocol con-                                                             Geth client) establishes a single outgoing peer connection to
+figurations matter a lot when under Gethlighting attacks. (3)                                                            a mainnet target T of interest. P sends only a single attack
+Gethlighting is also effective when a critical node is configured                                                        payload message (denoted as payload) that consists of 96,000
+with a higher number of maximum peer connections. Two                                                                    invalid transactions and one valid transaction tv at the end. Our
+Rinkeby bootnodes (i.e., I*** and A*** bootnode in Table II)                                                             probing node P never disseminates tv via any other messages;
+have more than 300 peers at the time of our experiment (which                                                            therefore, if tv is observed via a monitoring service node M
+is confirmed through their dashboard where they publicly share                                                           in the Ethereum’s canonical blocks, we can confirm that our
+their current numbers of peer connections [1]). The two nodes                                                            target T has received and properly processed payload.
+with that many peers are vulnerable to Gethlighting as well,
+demonstrating 4,153 sec and 2,891 sec maximum insertion                                                                     Table III summarizes our probing experiment results. We
+delays, and this well aligns with the results of our mainnet                                                             observe that our probing nodes are always able to send
+experiment in Section V-A.                                                                                               Gethlighting attack payloads (i.e., payload messages) to these
+
+                                                                                                                    10
+14 critical nodes in the mainnet, and we find the provided                            VII.     P OTENTIAL C OUNTERMEASURES
+valid transactions (i.e., tv ) are always included in the Ethereum
+blockchain. This provides a clear evidence that those critical                As we already discussed in Section IV, the Gethlighting
+mainnet nodes do not have any specific network filters that               partitioning attack is enabled because of the five Ethereum
+prevent Gethlighting.                                                     characteristics [EC1]–[EC5]. Since many of these Ethereum
+                                                                          characteristics are the result of some fundamental trade-offs
+    Note that we send only a single attack payload to a real-             in the system design, simply disabling or removing them
+world target (unlike our full-scale Gethlighting attacks) and             does not make a reliable countermeasure against Gethlighting.
+this does not cause any noticeable burden to the target.                  Instead, we offer several potential smaller tweaks to the exist-
+                                                                          ing Ethereum protocols (§VII-A–§VII-E) and one operational
+E. Ethical Concerns                                                       practice that mitigates the Gethlighting attack. We summarize
+                                                                          these potential countermeasures in Table IV
+    Our attack experiments are conducted with great care to
+avoid any disruption to the operation of the Ethereum mainnet.            Existing anti-eclipse schemes do not work. Before we
+First, in our experiments in Section V-A and Section V-B, we              delve into the potential countermeasures, let us clarify why
+launch attacks against our own Ethereum client nodes. Thus,               existing anti-eclipse schemes do not work against Gethlighting
+in these experiments, we never send any attack messages (e.g.,            at all. Existing eclipse attacks and their variants [3], [22],
+TX-flooding and adversary-mined block messages designed for               [23], [29], [37] have led to several practical countermeasures
+our attack) to any Ethereum mainnet nodes other than our own              against them. One highly effective family of techniques is to
+target. We ensure this by restricting our attack nodes to make            ensure a small number of reliable, benign peer connections.
+connections only to our target nodes. Our target nodes are also           Such connections can be trusted nodes [23], a centralized
+set to not relay any Ethereum messages to other benign peers in           block propagation network [16], [18], or a hijacking-resistant
+the mainnet. This way, we conduct highly isolated experiments             relay node [2]. All these defense schemes do not mitigate
+with our nodes while they are connected to the mainnet.                   Gethlighting at all because Gethlighting does not require a
+    In our real-world experiments in the Ethereum testnets                total monopoly of peer connections in the first place.
+in Section V-C, we actually create damage to some critical                    Another practical countermeasure is to make a few ad-
+nodes (not our own nodes) in the testnets but limit the total             ditional outbound peer connections for better connectivity.
+attack execution to six hours and avoid repeated experiments.             This has been adopted for mitigating eclipse and Erebus
+We believe that a certain level of attack demonstration in                attacks [22], [37]. As we show in Section V-A and V-C, any
+blockchain testnets for research purposes is widely accepted              minor increase in the number of peer connections does not
+in the security community [27].                                           make an effective countermeasure against Gethlighting.
+    Last, in our real-world experiments in the mainnet, we
+only test the reachability of Gethlighting attack payloads to             A. Taming TX-flooding
+real-world mainnet target nodes but never cause any damage
+to the targets.                                                               In Ethereum, both blocks and transactions can be
+                                                                          propagated either solicitedly or unsolicitedly. Gethlighting’s
+                                                                          TX-flooding strategy exploits the unsolicited mode of
+           VI.   ATTACK S CALABILITY AND C OST
+                                                                          transaction delivery.13 Disabling the unsolicited delivery mode
+    Since Ethereum is a permissionless public blockchain, an              for transactions (i.e., new transactions should be pooled by
+adversary can reuse the same set of virtual machines (VMs)                explicit requests) would make an effective countermeasure
+to establish multiple concurrent peer connections to multiple             against the TX-flooding strategy. Note that Bitcoin by design
+target nodes. Simple modifications to Ethereum clients (e.g.,             disallow unsolicited delivery of transactions and thus is robust
+increasing the maxpeers setting) enable the adversary’s VMs               against TX-flooding attacks.
+to create an unlimited number of potential target nodes, as long
+                                                                              A much less intrusive change to the Ethereum protocol
+as the VMs’ resources support the attack operation.
+                                                                          would be to simply limit the number of transactions that can
+    From our experiments, we learn that when an adversary                 be delivered by a single Transactions message. The maxi-
+exploits 25 peer connections, a single adversary peer gener-              mum number of transactions in Ethereum is only limited by the
+ates approximately 7 Mbps attack traffic. Because VMs used                maximum size of a Transactions message (i.e., 10 MB).
+for TX-flooding do not need to be fully-functioning nodes,                A further limitation can effectively reduce the impact of weak
+bandwidth becomes a limiting factor when reusing VMs for                  per-peer isolation by decreasing the processing time bound s
+TX-flooding. To simplify the discussion, assume that we use               in Section IV-A. Figure 11(a) shows how tx_limit (i.e.,
+25 distinct VMs to establish 25 peer connections to a single              the number of transactions that can be informed with a single
+target node. We confirm via our own iperf experiment that a               Transactions message) affects the attack performance of
+t2.large Amazon EC2 instance supports 1 Gbps upstream                     the TX flooding strategy. The block insertion delays are mea-
+bandwidth. Thus, one low-cost VM can target approximately                 sured for every block during a 24-hour-long attack experiment.
+140 nodes concurrently.                                                   There have been only a few blocks with insertion delays larger
+                                                                          than two minutes when tx_limit=256. However, still 1% of
+    We use the Amazon EC2 pricing table for the t2.large
+                                                                          the blocks have experienced insertion delays larger than five
+instance (i.e., $0.0928 USD per hour, $0.09 USD per GB)
+                                                                          minutes with tx_limit=1024.
+and consider the attack is executed for 24 hours. In total, it
+would cost only about $5,714 for targeting all 10K full nodes               13 Gethlighting’s choice of unsolicited mode for transactions should not be
+in Ethereum for 24 hours.                                                 confused with the use of solicited mode for block propagation.
+
+
+                                                                     11
+                                                            TABLE IV: Summary of countermeasures, affected attack steps, and their side effects
+
+                                         Countermeasures                                                                     Corresponding             Related Attack                                                                  Disadvantages
+                                                                                                                              Ethereum’s                   Steps                                                                       or Side Effect
+                                                                                                                             Characteristics
+                                         Taming TX-flooding                                                                     [EC1]                Step-Á & Step-Â                      Significant changes to P2P
+                                         Bounded transaction handling                                                           [EC1]                Step-Á & Step-Â              A few worst-case delays, slow TX handling
+                                         Making clients block-synchronized first                                                [EC1]                Step-Á & Step-Â                     Weak transaction propagation
+                                         Gethlighting-resistant block propagation                                            [EC2], [EC5]                 Step-Á                         Msg complexity, risk of DoS
+                                         Banning Gethlighting peers                                                             [EC3]                Step-Á & Step-Â                  False positives, risk of new attacks
+                                         Overprovisioning clients                                                               [EC1]                Step-Á & Step-Â                               Expensive
+
+                                    1                                                                                          1                                                                                              1
+Cumulative distribution function
+
+
+
+
+                                                                                          Cumulative distribution function
+
+
+
+
+                                                                                                                                                                                          Cumulative distribution function
+                                   0.8                                                                                       0.8                                                                                             0.8
+
+
+                                   0.6                                                                                       0.6                                                                                             0.6
+
+
+                                   0.4                                                                                       0.4                             Without attack                                                  0.4
+                                                               Without attack                                                                           tx_exec_bound=64                                                                                   Without attack
+                                                                  tx_limit=256                                                                        tx_exec_bound=256                                                                                         32 CPUs
+                                   0.2                          tx_limit=1024                                                0.2                    tx_exec_bound=1024                                                       0.2                                16 CPUs
+                                                                tx_limit=4096                                                                       tx_exec_bound=4096                                                                                           8 CPUs
+                                                      (unmodified) No tx_limit                                                               (unmodified) No tx_exec_bound                                                                         (recommended) 4 CPUs
+                                    0                                                                                          0                                                                                              0
+                                         1       10          100         1000    10000                                             1          10          100         1000       10000                                             1          10          100        1000     10000
+                                               Block insertion delay (seconds)                                                              Block insertion delay (seconds)                                                                 Block insertion delay (seconds)
+
+                                              (a) Taming TX-flooding                                                                   (b) Bounded transaction handling                                                                (c) Varying the number of CPUs
+
+                                                                                         Fig. 11: Effectiveness of countermeasures.
+
+
+    Although rate limiting transactions is less intrusive than                                                                                              see the result with tx_exec_bound=64 is still worse than
+the other alternative, it still requires some non-trivial changes                                                                                           the ‘no attack’ case. Compared to limiting the transaction
+to the existing protocol. Therefore, special care must be taken                                                                                             message size, bounding transaction handling can be preferred
+before applying this change to the Ethereum network protocol.                                                                                               in practice since it does not require any changes to the protocol.
+
+B. Bounded Transaction Handling                                                                                                                             C. Making Clients Block-Synchronized First
+    We learn in Section IV-A that the upper-bound of a peer’s                                                                                                   One simple-yet-effective countermeasure against Gethlight-
+service rate, due to TX-flooding, is inversely proportional                                                                                                 ing is to prioritize any protocol messages exchanged for
+to the system parameter s (i.e., the time quantum of Go’s                                                                                                   synchronization (e.g., informing a block, announcing a block
+preemptive scheduling). Thus, reducing s can make an                                                                                                        hash, requesting or responding with block header or body) over
+effective countermeasure as it increases the service rate of                                                                                                other messages, such as transaction messages. The rationale
+benign peers, shortens message queues, and decreases delays.                                                                                                behind this strict prioritization is that a good synchronization
+                                                                                                                                                            of blocks must precede transactions. When a node is not
+    One caveat, however, is that a system-wide reduction                                                                                                    synchronized with the canonical chain, transactions cannot be
+of Go’s scheduling time quantum (i.e., 20 msec) could                                                                                                       correctly validated.
+potentially result in performance degradation or unexpected
+problems. To mitigate any such unforeseen problems, we                                                                                                          To test this, we implement the message prioritization archi-
+apply a decreased time bound exclusively for the TX                                                                                                         tecture, which augments the existing single protocol message
+handling routine. We modify the transaction validation routine                                                                                              channel15 to high- and low-priority channels. The protocol
+so that the goroutine, which executes it, should yield to                                                                                                   messages exchanged for synchronization are handled with a
+other goroutines after validating every tx_exec_bound                                                                                                       strictly higher priority. We run a TX-flooding attack with 40
+transactions.14 This way, Gethlighting peers would not be                                                                                                   Gethlighting peers against our own Ethereum full-node that
+able to continuously occupy the entire allocated time quantum                                                                                               is configured as recommended [13] (i.e., four CPU cores and
+of 20 msec. The Gethlighting-induced job of validating                                                                                                      16 MB memory). No partitioning event lasts longer than three
+transactions is then interleaved to allow the execution of                                                                                                  minutes for a 24-hour-long experimentation.
+message handling goroutines of benign peers.
+                                                                                                                                                                Note, however, that such a strict prioritization based on
+     Figure 11(b) shows how tx_exec_bound (i.e., the                                                                                                        message types can potentially create new problems and even
+maximum number of transactions that can be handled before                                                                                                   open up a new avenue of attacks and therefore should be
+yielding to other goroutines) affects the attack performance.                                                                                               carefully reviewed and studied before any deployment. For
+It is generally an effective countermeasure to Gethlighting but                                                                                             example, transaction propagation may become slower, ren-
+one downside is that it does not completely address the attacks;                                                                                            dering Ethereum slower to accept transactions. Worse, some
+                            14 Go        runtime’s Gosched() is used to yield to other goroutines. [19]                                                         15 See   Figure 2 in Section II-B for more information.
+
+
+                                                                                                                                                       12
+transactions can be targeted and dropped by adversaries who               has 2× (i.e., 8 CPUs) or 4× (16 CPUs) of the recommended
+flood more higher-priority messages in the network.                       number of CPUs, the worst case partitioning durations can
+                                                                          easily go above 1,000 seconds (see their 90-th percentile in
+D. Gethlighting-Resistant Block Propagation                               Figure 11(b)). Moreover, it is not a cost-effective solution since
+                                                                          only marginal reduction of partitioning duration is expected as
+     As a mitigation of Gethlighting in Step-Á, we may sacrifice          we keep doubling the number of CPUs at the target.
+the high optimization in the block propagation protocol a
+little by introducing some redundancy and concurrent block                                      VIII.   D ISCUSSION
+propagation. One possible yet-radical solution is to prevent
+a peer from receiving a new block in a solicited manner.                  A. Opportunistic Attacks
+This ensures that Step-Á never succeeds as the solicited block
+propagation is not needed in the first place. The price of this               While the Gethlighting attack has notable advantages men-
+mitigation is the significantly increased message complexity              tioned above, it has one minor limitation. That is, the attack is
+for block propagation.                                                    opportunistic in terms of the duration of the partitioning pro-
+                                                                          cess and the time required to begin partitioning a target. This
+                                                                          is because its attack strategies are dependent not only on the
+E. Banning Gethlighting Peers                                             adversary’s connections but also on benign peer connections,
+    One convenient and effective countermeasure is to ban                 which account for roughly half of the target’s peer connections.
+peers that exhibit potentially malicious behaviors; e.g., flood-          In practice, therefore, adversaries would need to wait for a
+ing with invalid-looking transactions. As we discuss in Sec-              short period of time (e.g., a few minutes) before initiating
+tion IV-C, the current Ethereum clients do not have such peer             partitioning, and then attempt a number of partitioning tries to
+banning mechanisms. One possible peer banning scheme is                   generate a partitioning event lasting long enough to accomplish
+to ban peers that send too many invalid-looking transactions.             their ultimate goals (e.g., double spending). Gethlighting-
+This banning scheme can trivially disable the Gethlighting                induced partitioning is effective intermittently since it intro-
+attacks since Gethlighting adversaries cannot maintain their              duces mild disruption in processing received blocks, often
+attack effectiveness when all her peers get disconnected from             enough to trigger timeouts in message handling. Some mes-
+the target node as soon as they perform any attack strategies.            sages received during the bulk block download (i.e., Step-Â)
+                                                                          occasionally may get processed in a timely manner, rendering
+    However, there are potential side effects that are not trivial        a successful recovery from partitioning. The general trend,
+to address. First, Ethereum nodes may ban peers by mistakes.              nonetheless, is that the more Gethlighting peers, the longer
+For example, a peer may get banned mistakenly for sending                 partitioning is (Section V-A).
+invalid-looking transactions when it has sent transactions that
+look perfectly valid from its own perspective. This may arise             B. Detection of Gethlighting
+due to the lack of synchronization between two peers. Or,
+a peer may get disconnected for not responding in a timely                    Partitioning detection mechanisms [2] against existing at-
+fashion when it is actually experiencing network failures or              tacks [3], [22], [33], [37] would determine whether or not
+delays. Second, malicious parties may attempt to exploit these            a target node is eclipsed (i.e., attackers control all peer
+new peer banning schemes. With these schemes, a simple                    connections). As a result, these measures would never detect
+denial-of-service (DoS) attack against a target node can easily           Gethlighting, as the attack never eclipses any Ethereum node.
+disconnect all of the target’s peers, which can be used as
+stepping stones for other attacks [3], [22], [37]. Or, creating a             However, Gethlighting is not imperceptible. Gethlighting
+temporal chain inconsistency in the network may cause sudden              peers behave differently from most benign peers and, thus, in
+bulk disconnections of network peers.                                     theory, they can be detected with proper measures. Given the
+                                                                          fact that Gethlighting is not considered a volumetric attack, it is
+                                                                          difficult to detect at the network layer (e.g., IDS or firewall).
+F. Overprovisioning Clients                                               Thus, each node in the system should identify Gethlighting
+    One side-effect-free countermeasure against the TX-                   peers at the application layer, which would necessitate some
+flooding strategy is to provision more resources to a target              adjustment of Ethereum client applications.
+node. The more CPU cores are allocated to a target, the
+less time is expected to handle each protocol message (see                                    IX.    R ELATED W ORK
+Section IV-A). Thus, TX flooding attacks become less effective
+when targeting an overprovisioned target node.                            A. Partitioning Attacks in Blockchain
+
+    Figure 11(c) shows how the number of CPUs at a target                     Most known partitioning attacks aim to monopolize a tar-
+node affects the effectiveness of TX-flooding attacks. Having             get’s peer connections completely. The Eclipse attacks against
+more CPU cores clearly lowers attack effectiveness. When a                Bitcoin [22] and Ethereum [23], [29] demonstrate that an
+target has four CPU cores (as recommended by the official                 adversary can monopolize all outgoing peer connections by
+Ethereum client [13]), the median partitioning duration is                exploiting software vulnerabilities, which have been patched
+about 250 seconds. This drastically decreases to around 25                since their disclosure. Additionally, it is also demonstrated that
+seconds when we overprovision the target with the twice the               a strong network adversary (e.g., malicious ISP) can launch
+recommended number of CPU cores.                                          a man-in-the-middle attack, gaining complete control of a
+                                                                          target node’s peer connections via a data-plane [37] or control-
+    However, the result also shows that overprovisioning can-             plane attacks [3]. An Eclipse attack against the InterPlanetary
+not be an ultimate solution to Gethlighting. Even when a target           File System (IPFS), which uses a peer-to-peer networking
+
+                                                                     13
+                                   TABLE V: Comparison with existing blockchain partitioning attacks
+
+                                                                     Attack requirements                                        Attack characteristics
+
+               Attack                Target      # attack       Network               Attack              Need       Partitioning        Attack     Deter-
+                                    blockchain    conns         resource            preparation          reboot?     duration            fork       ministic?
+     Heilman et al., 2015 [22]       Bitcoin       All         ∼4.6K bots           Several hours                    Permanent?                          ?
+
+    Wüst and Gervais 2016 [42]     Ethereum        1             1 IP             Several weeks†           5        Permanent              5
+                                                               Hijacking
+     Apostolaki et al., 2017 [3]     Bitcoin       All      <100 BGP prefixes
+                                                                                    ∼90 seconds             5        Permanent?                          ?
+
+     Marcus et al., 2018 [29]       Ethereum       All            2 IPs           Several  minutes•                  Permanent
+    Henningsen et al., 2019 [23]    Ethereum       All            2 IPs             Several days            5        Permanent
+                                                              Compromising
+       Tran et al., 2020 [37]        Bitcoin       All        few large ISPs
+                                                                                   Several weeks            5        Permanent?                          ?
+
+       Saad et al., 2021 [33]        Bitcoin       All         ∼100 IPs          Not evaluated                  ‡    Not evaluated∗           5
+            Gethlighting            Ethereum      ∼25            1 IP              <1 dayO            5         ∼3 hours                      5
+        ?: not anymore with the deployed peer eviction mechanism †: for adversarial chain generation ‡: partitioning newly arriving targets only
+                   ∗: depending on network churn : only from the genesis block •: to craft node IDs O: based on testnet evaluation
+
+
+architecture similar to blockchain systems, is also presented                       TABLE VI: Gethlighting vs. DETER [27] Differences
+recently [32]. Our Gethlighting attack significantly reduces
+the attack requirement (i.e., from complete control of peer                      Characteristics            Gethlighting                         DETER
+connections to partial control), rendering any existing detection
+                                                                                  Attack goal           Delay block insertion          Drop some transactions
+mechanisms or countermeasures designed for existing parti-
+tioning attacks (e.g., routing-aware peering [38], SABRE [2])                     Consequence         Target node is partitioned      Transactions are censored
+                                                                                                        (i.e., safety violation)
+completely ineffective.
+                                                                                  Implication                ; DETER                        ; Gethlighting
+    Earlier in 2016, Wüst and Gervais [42] present a new                           Payload              Invalid transactions            Invalid* transactions
+permanent Ethereum partitioning attack with only a single                                                                                (* carefully-crafted)
+malicious connection to a target node. The Wüst-Gervais (or                      Attack cost          A few servers; zero gas           One server; zero gas
+WG) attack inserts an adversary-generated chain that is longer                     Detection            Difficult at network;            Difficult at network;
+than the canonical chain to stop the target’s chain growth,                                            Feasible at application          Feasible at application
+whereas the Gethlighting attack triggers a subtle condition
+in the Geth’s multi-peer connection scheduling mechanism
+to time out some blocks at the target. Although Gethlight-
+                                                                                B. Denial-of-Service Attacks in Blockchain
+ing requires more malicious peer connections than the WG
+attack needs, occupying some more (e.g., 25) connections of                         Availability attacks have been studied in the literature be-
+the target for Gethlighting costs very little in practice (see                  cause the liveness of a blockchain system is a critical property.
+Section III-A). In contrast, generating an alternative chain from               Baqer et al. [5] present an empirical study on a Bitcoin
+the genesis block for the WG attack would cost significantly,                   stress test campaign that has resulted in a DoS attack. Mirkin
+which is completely unnecessary for Gethlighting. Last, the                     et al. [30] claim that adversaries can halt PoW blockchain
+WG attack was addressed with a hotfix [35] that prevents                        systems by publishing only partial information (e.g., header)
+forking at the genesis block. Gethlighting, however, is less                    of her mined blocks, with fewer resources (e.g., 21% of the
+likely to be fixed, completely and without any side-effect (see                 total hash power). Vasek et al. [39] conduct an investigation
+Section VII), by a single hotfix because the attack is made                     into known DDoS attacks and assess the anti-DDoS system
+possible due to several system and protocol characteristics (as                 adoption status of the Bitcoin ecosystem’s key operational
+we summarize as [EC1]–[EC5] in Section IV).                                     entities (e.g., cryptocurrency exchanges and mining pools).
+     Table V summarizes our comparison of Gethlighting with                         A recent work by Li et al. [27], called a DETER attack,
+the existing blockchain partitioning attacks. The attack re-                    shares some similarity to Gethlighting as both present new
+quirements are compared in terms of the required number                         low-rate denial-of-service attacks in Ethereum. However, the
+of attack connections to be monopolized, required network                       two attacks are entirely different and thus should not be
+resource, attack preparation time, and whether the target reboot                confused with each other. The main attack goal of DETER is
+is necessary for an attack. We also compare the maximum                         to drop some legitimate transactions at a target node and thus
+partitioning duration, whether the attacker can inject adversary-               transactions in Ethereum can be censored by the adversary.
+mined branch at an arbitrary block height, and whether the                      In contrast with DETER, Gethlighting aims to delay block
+attack is deterministic (Section VIII-A). Gethlighting is the                   insertion at a target node so significantly that the target is
+first partitioning attack that does not require a total eclipse of              virtually partitioned from the Ethereum network, rendering the
+peer connections since an earlier attack by Wüst and Gervais                   violation of the safety property. Also, neither Gethlighting nor
+in 2016, which has been prevented after a simple fix [35].                      DETER imply the successful execution of the other. One char-
+Gethlighting also does not require multiple IP addresses and                    acteristic that may make the two attacks look similar is their
+can target any existing reachable nodes without requiring the                   attack payload — i.e., both attacks send invalid transactions to
+target to restart.                                                              their targets. Yet, their strategies to creating invalid transactions
+
+                                                                           14
+differ; e.g., DETER requires more carefully created invalid                             [17]   W. Fan, S. Wuthier, H.-J. Hong, X. Zhou, Y. Bai, and S.-Y. Chang, “The
+transactions. In short, the Gethlighting attack is different from                              security investigation of ban score and misbehavior tracking in bitcoin
+DETER as it does not share the goals or the attack techniques                                  network,” in Proc. IEEE International Conference on Distributed Com-
+                                                                                               puting Systems (ICDCS), 2022.
+of DETER. Table VI summarizes the key differences between
+                                                                                        [18]   FIBRE, “Fast Internet Bitcoin Relay Engine,” 2020, http://bitcoinfibre.
+Gethlighting and DETER.                                                                        org/.
+                                                                                        [19]   Go. Go runtime package. https://pkg.go.dev/runtime.
+                           X.     C ONCLUSION                                           [20]   Go Ethereum github, “1.11.0 milestone,” 2022, https://github.com/
+                                                                                               ethereum/go-ethereum/milestone/136.
+    In this work, we show that a subtle (seemingly                                      [21]   Google, “pprof is a tool for visualization and analysis of profiling data.”
+insignificant) low-rate denial-of-service vulnerability in                                     2016, https://github.com/google/pprof.
+blockchain peer-to-peer scheduling algorithms can lead to                               [22]   E. Heilman, A. Kendler, A. Zohar, and S. Goldberg, “Eclipse attacks
+a significant network-wide partitioning vulnerability. Worse                                   on bitcoin’s peer-to-peer network,” in Proc. USENIX Security, 2015.
+yet, attacks like Gethlighting renders all existing anti-eclipse                        [23]   S. Henningsen, D. Teunis, M. Florian, and B. Scheuermann, “Eclipsing
+defenses ineffective because they do not eclipse their target                                  ethereum peers with false friends,” arXiv preprint arXiv:1908.10141,
+nodes in the first place. Our hotfix to Gethlighting has been                                  2019.
+included in the upcoming Geth release and we leave the                                  [24]   H. Heo and S. Shin, “Behind block explorers: Public blockchain
+generalization of this new attack vector in other blockchain                                   measurement and security implication,” in Proc. IEEE International
+networks (including Ethereum 2.0) for future work.                                             Conference on Distributed Computing Systems (ICDCS), 2021.
+                                                                                        [25]   N. Johnson, “Discussion of square-rooted block propagation in
+                                                                                               ethereum@allcoredevs,” 2018, https://gitter.im/ethereum/AllCoreDevs?
+                          ACKNOWLEDGMENT                                                       at=5b9e20db54587954f9ad87bd.
+                                                                                        [26]   S. K. Kim, Z. Ma, S. Murali, J. Mason, A. Miller, and M. Bailey, “Mea-
+   We thank the anonymous reviewers for their helpful feed-                                    suring ethereum network peers,” in Proc. ACM Internet Measurement
+back. We also thank Yongdae Kim for useful comments on                                         Conference (IMC), 2018.
+an early version of the paper. This work was supported by                               [27]   K. Li, Y. Wang, and Y. Tang, “Deter: Denial of ethereum txpool
+Electronics and Telecommunications Research Institute (ETRI)                                   services,” in Proc. ACM CCS, 2021.
+grant funded by the Korean government [23ZR1300, Research                               [28]   H.-J. Liao, C.-H. R. Lin, Y.-C. Lin, and K.-Y. Tung, “Intrusion detection
+on Intelligent Cyber Security and Trust Infra].                                                system: A comprehensive review,” Journal of Network and Computer
+                                                                                               Applications, 2013.
+                                                                                        [29]   Y. Marcus, E. Heilman, and S. Goldberg, “Low-resource eclipse attacks
+                                R EFERENCES                                                    on ethereum’s peer-to-peer network.” IACR Cryptol. ePrint Arch., 2018.
+ [1]   Rinkeby: Network dashboard. https://www.rinkeby.io/#stats.                       [30]   M. Mirkin, Y. Ji, J. Pang, A. Klages-Mundt, I. Eyal, and A. Juels,
+                                                                                               “Bdos: Blockchain denial-of-service,” in Proc. ACM CCS, 2020.
+ [2]   M. Apostolaki, G. Marti, J. Müller, and L. Vanbever, “Sabre: Protecting
+       bitcoin against routing attacks,” in Proc. NDSS, 2018.                           [31]   K. Nayak, S. Kumar, A. Miller, and E. Shi, “Stubborn mining: Gener-
+                                                                                               alizing selfish mining and combining with an eclipse attack,” in Proc.
+ [3]   M. Apostolaki, A. Zohar, and L. Vanbever, “Hijacking bitcoin: Routing
+                                                                                               IEEE European Symposium on Security and Privacy (EuroS&P), 2016.
+       attacks on cryptocurrencies,” in Proc. IEEE S&P, 2017.
+ [4]   S. Baek, H. Nam, Y. Oh, M. Tran, and M. S. Kang, “On the claims                  [32]   B. Prünster, A. Marsalek, and T. Zefferer, “Total eclipse of the heart–
+       of weak block synchronization in bitcoin,” in Proc. International                       disrupting the {InterPlanetary} file system,” in Proc. USENIX Security,
+       Conference on Financial Cryptography and Data Security (FC), 2022.                      2022.
+ [5]   K. Baqer, D. Y. Huang, D. McCoy, and N. Weaver, “Stressing out:                  [33]   M. Saad, S. Chen, and D. Mohaisen, “SyncAttack: Double-spending in
+       Bitcoin “stress testing”,” in Proc. International Conference on Financial               Bitcoin Without Mining Power,” in Proc. ACM CCS, 2021.
+       Cryptography and Data Security (FC), 2016.                                       [34]   M. H. Swende, “eth/fetcher: throttle peers which deliver many
+ [6]   Bitcoin Core PR Review Club, “Add unit testing of node eviction logic,”                 invalid transactions,” 2022, https://github.com/ethereum/go-ethereum/
+       2020, https://bitcoincore.reviews/20477.                                                pull/25573.
+ [7]   J.-P. Eisenbarth, T. Cholez, and O. Perrin, “Ethereum’s peer-to-peer             [35]   P. Szilágyi, “eth/downloader: bound fork ancestry and allow heavy
+       network monitoring and sybil attack prevention,” Journal of Network                     short forks,” 2016, https://git.with.parts/mirror/go-ethereum/commit/
+       and Systems Management, 2022.                                                           39ce85cf5d119ef830561ecdc4096bfe565bc5c1.
+ [8]   Ethereum, “Node discovery protocol v5,” 2020, https://github.com/                [36]   ——, “Eip-225: Clique proof-of-authority consensus protocol,” 2017,
+       ethereum/devp2p/blob/master/discv5/discv5.md.                                           https://eips.ethereum.org/EIPS/eip-225.
+ [9]   Ethereum Core Developers, “eth: implement the newblockhashes pro-                [37]   M. Tran, I. Choi, G. J. Moon, A. V. Vu, and M. S. Kang, “A stealthier
+       tocol proposal,” 2015, https://github.com/ethereum/go-ethereum/pull/                    partitioning attack against bitcoin peer-to-peer network,” in Proc. IEEE
+       1188.                                                                                   S&P, 2020.
+[10]   Ethereum Foundation, “Light ethereum subprotocol,” 2021, https://                [38]   M. Tran, A. Shenoi, and M. S. Kang, “On the Routing-Aware Peering
+       github.com/ethereum/devp2p/blob/master/caps/les.md.                                     against Network-Eclipse Attacks in Bitcoin,” in Proc. USENIX Security,
+[11]   ——, “Connecting to the network,” 2022, https://geth.ethereum.org/                       2021.
+       docs/fundamentals/peer-to-peer.                                                  [39]   M. Vasek, M. Thornton, and T. Moore, “Empirical analysis of denial-
+[12]   ——, “Ethereum wire protocol,” 2022, https://github.com/ethereum/                        of-service attacks in the bitcoin ecosystem,” in Proc. International
+       devp2p/blob/master/caps/eth.md.                                                         Conference on Financial Cryptography and Data Security (FC), 2014.
+[13]   ——, “Node and clients,” 2022, https://ethereum.org/en/developers/                [40]   M. V. D. Wijden, “Mark ddos attacker as bad in p2p layer,” 2021,
+       docs/nodes-and-clients/.                                                                https://github.com/ethereum/go-ethereum/pull/22198.
+[14]   Ethernodes. The ethereum node network & node explorer. https://                  [41]   G. Wood et al., “Ethereum: A secure decentralised generalised transac-
+       ethernodes.org.                                                                         tion ledger,” Ethereum project yellow paper, 2014.
+[15]   Ethstats. Ethereum network status. https://ethstats.dev.                         [42]   K. Wüst and A. Gervais, “Ethereum eclipse attacks,” ETH Zurich, Tech.
+[16]   Falcon, “A Fast Bitcoin Backbone,” 2016, https://www.falcon-net.org/.                   Rep., 2016.
+
+
+                                                                                   15
+                                                                                           A PPENDIX                                        B. Block Announcement Batches
+A. Simple Tests with OpenEthereum                                                                                                               Figure 13 depicts the distribution of measured block an-
+                                                                                                                                            nouncement batches from one of our 24-hour Gethlighting
+    In this section, we demonstrate the attack feasibility of
+                                                                                                                                            attack experiments. Block announcement messages arriving in
+Gethlighting against OpenEthereum, the second most pop-
+                                                                                                                                            a 0.4-second time window are merged into a single batch. The
+ular Ethereum client. The attack target is our Ethereum
+                                                                                                                                            number of batches is one or two more than 95 percent of the
+full-node running OpenEthereum v3.3.3 on Amazon EC2’s
+                                                                                                                                            time. This confirms that a Gethlighting target has only one or
+i3.8xlarge instance. Note that Our Gethlighting implemen-
+                                                                                                                                            two chances to solicitedly retrieve a new block as we discussed
+tation based on Geth 1.10.20 (Section V) is used without any
+                                                                                                                                            in Section IV-B.
+modification since they both communicate with each other in
+the Ethereum protocol. In overall, a TX-flooding attack with
+25 attack nodes is launched for 5 hours to show the longest                                                                                 C. Why are transactions exceptionally more effective than
+partitioning duration of 2,004 seconds.                                                                                                     other message types?
+                                                                                                                                                For successful Gethlighting, the attack must continuously
+                          1,200
+Block insertion delay (sec)
+
+
+
+
+                                                                                                                                            occupy the full span of message handling goroutine’s time
+                          1,000                                                                                                             slot (i.e., 20 msec) every time it is scheduled for execu-
+                            800                                                                                                             tion (Section IV-A). Gethlighting with a large number of
+                            600                                                                                                             invalid transactions can accomplish this because of Ethereum’s
+                            400                                                                                                             gracious handling of transactions (Section IV-C). That is,
+                                                                                                                                            every delivered transaction is faithfully processed one-by-one,
+                            200                                                                                                             rendering consecutive full occupation of execution time slots
+                              0 0                                               1,000       2,000      3,000        4,000      5,000        (as depicted in Figure 4).
+                                                                           (Relative) Time at which a new block is inserted (sec)
+                                                                                                                                                Other message types do not achieve this because they either
+Fig. 12: An example snapshot of an OpenEthereum node under                                                                                  involve IO operations that make the goroutine get preempted
+the Gethlighting attack.                                                                                                                    or the entire delivered data cannot occupy long enough CPU
+                                                                                                                                            time by early short-circuiting. For example, a NewBlock
+    Figure 12 shows the snapshot of the first 5,200 sec-                                                                                    message containing a block with thousands of transactions is
+onds of the target node under a Gethlighting attack. We                                                                                     immediately discarded due to invalid proof-of-work and thus
+observe periodic partitionings up to 1,148 seconds as soon                                                                                  induces only few CPU cycles for a hash computation.
+as 18 Gethlighting peers are connected (at 1,800 sec) to the
+victim. Even worse, a majority of benign peer connections                                                                                   D. Why are messages delayed longer with more TX-flooding
+get disconnected at the onset of each partitioning; that is,                                                                                peers?
+all benign peer connections get disconnected by the target                                                                                      Here, we extend our evaluation of the controlled experi-
+during 5 out of 7 partitioning episodes of Figure 12. The                                                                                   ment in Section V-A to better understand the inner-workings
+reasons of massive disconnection turn out to be timer ex-                                                                                   of a target Ethereum node under Gethlighting attacks via
+piration of solicited messages: a request for block header                                                                                  goroutine profiling. A Go profiling tool pprof [21] is enabled
+is not responded in 3 seconds (FORK_HEADER_TIMEOUT);                                                                                        at the attack target Geth process to build goroutine execution
+a request for a transaction is not answered in 10 seconds                                                                                   profiles from actual execution trace log.
+(POOLED_TRANSACTION_TIMEOUT); and a block body re-
+trieval is not fulfilled in 20 seconds (BODIES_TIMEOUT).                                                                                    Message handling goroutines. For each peer connection,
+OpenEthereum not only applies shorter hard-coded timeout                                                                                    two goroutines (lightweight threads supported by Go) are in
+values than Geth, but also disconnects remote peers if any                                                                                  charge of handling incoming peer messages (Figure 2): the
+of the timers expire. The consequence is catastrophic; a target                                                                             P2P message handler reads a peer message from the network
+loses all peer connections, and further implying that Gethlight-                                                                            and sends it to a subprotocol Go channel (e.g., ETH), while
+ing is a very effective stepping stone for other attacks [3], [22],                                                                         the ETH message handler reads a message from the channel
+[37].                                                                                                                                       and processes it.
+                                                                                                                                               The pseudo-code for the relevant Geth functions is shown
+                              Cumulative distribution function
+
+
+
+
+                                                                  1
+                                                                                                                                            in Algorithm 1 and the functions are executed by two peer
+                                                                 0.8                                                                        message handling goroutines: read-loop goroutine (i.e.,
+                                                                 0.6
+                                                                                                                                            P2P message handler in Figure 2) executing readLoop()
+                                                                                                                                            and handle-loop goroutine (i.e., ETH message handler)
+                                                                 0.4                                                                        executing ETH.handleLoop(). Every time a new peer
+                                                                 0.2                                                                        connection is established, both goroutines are invoked. The
+                                                                                                                                            separation of peer message handling is done for the sake
+                                                                  0                                                                         of modularity, as an Ethereum node can communicate in
+                                                                       0      1      2       3    4      5     6        7      8
+                                                                                                                                            subprotocols other than the default Ethereum protocol (e.g.,
+                                                                                         The number of batches
+                                                                                                                                            snap). The Go channel between goroutines is an unbuffered
+Fig. 13: Distribution of the number of block announcement                                                                                   channel that can only hold one single message at a time.
+batches.                                                                                                                                    Invariable attack traffic and CPU execution times. Because
+                                                                                                                                            our TX-flooding procedure transmits back-to-back 10 MB
+
+                                                                                                                                       16
+                                       200                                                                                 100                                                                                100
+Average protocol message rate (Mbps)
+
+
+
+
+                                                                                           % of total CPU execution time
+                                                                                                                            80                                                                                80
+                                       150
+
+
+
+
+                                                                                                                                                                                       % of wall clock time
+                                                                                                                            60                                   Others                                       60
+                                                                                                                                                 handle-loop (normal)
+                                       100                                All peers                                                                                                                                                            Network wait
+                                                                 TX-flooding peers                                                            handle-loop (tx-flooding)                                                                         Sync block
+                                                                                                                                                   read-loop (normal)
+                                                                                                                            40                  read-loop (tx-flooding)                                       40
+
+                                       50
+                                                                                                                            20                                                                                20
+
+
+                                        0                                                                                    0                                                                                 0
+                                             5   10    15     20     25    30    35   40                                         5    10   15    20      25    30    35   40                                           5    10   15     20     25    30   35   40
+                                                       # of TX-flooding peers                                                              # of TX-flooding peers                                                                # of TX-flooding peers
+
+                                                      (a) Message rate                                                     (b) Execution time dist. of relevant goroutines                                          (c) Blocking reasons of read-loop
+
+                                                                                                          Fig. 14: Controlled experiment results.
+
+
+Algorithm 1 Geth peer message handling functions                                                                                                       network wait is a blocking reason caused by a goroutine
+ /* P2P peer message handling loop                                                                                                           */        waiting for new data bytes to arrive from a network pipe,
+Func readLoop()                                                                                                                                        while sync block indicates that a message in the subprotocol
+      while true do
+         msg ← readMsg()                                                                                                                               Go channel has not yet been pulled by the consumer goroutine
+         proto ← getProto(msg.code)                                                                                                                    at the other end of the channel. If there are only 5 Gethlighting
+          /* proto.in is unbuffered input channel of                                                                                         */        peers, a normal peer’s read-loop spends 90% of its time
+          /* matching subprotocol                                                                                                            */
+         send msg to proto.in                                                                                                                          waiting for a new message from the remote peer. On the other
+    end                                                                                                                                                hand, there is almost no stopping (i.e., sync block) due to
+end
+                                                                                                                                                       any delayed message processing by the subprotocol handler.
+ /* ETH subprotocol messsge handling loop                                                                                                    */        However, if there are 20 or more Gethlighting peers, the
+Func ETH.handleLoop()
+                                                                                                                                                       read-loop goroutine spends more than 70% of its running
+      while true do
+          /* wait until receiving a message                                                                                                  */
+                                                                                                                                                       time waiting for a message in the channel to be pulled;
+          /* from the input channel                                                                                                          */        as a result, newly arrived network data bytes (in the TCP
+         receive msg from ETH.in                                                                                                                       receive buffer) cannot be pulled by read-loop, rendering
+         ETH.handle(msg)
+    end                                                                                                                                                burst incoming messages (stacked up at the buffer) waiting
+end                                                                                                                                                    for the application to consume. This effectively renders an
+                                                                                                                                                       accumulation effect of message processing delays.
+messages, it is reasonable to assume that more peers will
+be able to deliver more messages. However, as shown in                                                                                                              # of TX-flooding peers
+                                                                                                                                                              k=                                                    slots                k slots
+Figure 14(a), the average message rate does not increase as the                                                                                                           # of CPUs
+
+number of Gethlighting peers increases. The TCP flow control
+mechanism does not allow an application to send data bytes                                                                                                                      …                                                            …
+faster than the rate at which data is consumed at the other
+end of the pipe in the long run. It appears that the amount of                                                                                                                        ~20ms
+                                                                                                                                                                                                                                                                time
+inbound traffic indeed reflects the target Geth process’s CPU
+resources. However, a TCP sender can temporarily push data                                                                                             Fig. 15: Interleaved execution of handle-loop goroutines.
+up to the buffer size (i.e., TCP receive window size) unless                                                                                           The execution of a normal peer’s handle-loop (white) is
+network congestion is a bottleneck.                                                                                                                    interleaved by k successive execution slots of the Gethlighting
+                                                                                                                                                       peers (grey).
+    Figure 14(b) demonstrates that the CPU resource distribu-
+tion between normal and Gethlighting peers is also invariant;
+in other words, an adversary does not simply force a target
+node to allocate more CPU resources for her messages by                                                                                                Interleaved execution of goroutines. Handling Ethereum
+increasing the number of Gethlighting peer connections. It                                                                                             messages (via handle-loop) is a CPU-intensive process
+is worth noting that the invariability of CPU execution time                                                                                           that reserves CPU execution time based on which tasks should
+distribution corresponds to the observed constant attack traffic.                                                                                      be performed with the message. For example, a message
+Attack traffic should have increased if more CPU time was                                                                                              informing a newly mined block consumes far more CPU
+allocated to Gethlighting peers’ goroutines.                                                                                                           time than a message propagating a single transaction. The
+                                                                                                                                                       handle-loop goroutine for each peer connection is either
+Incoming message queuing due to sluggish message pro-                                                                                                  preempted voluntarily (i.e., blocking wait for a message in
+cessing. When there are 20 or more TX-flooding peers, we                                                                                               the Go channel) or by a non-cooperative preemption by the
+find that lagging in message processing becomes the domi-                                                                                              scheduler (i.e., outstanding Ethereum message processing is
+nant reason for blocking read-loop goroutines from execution.                                                                                          incomplete). The current (i.e., Go 1.17.8) scheduler preempts
+Figure 14(c) depicts the average proportion of time that normal                                                                                        a goroutine that is running for more than the predefined time
+peers’ read-loop goroutines stop execution for two reasons:                                                                                            slot of 20 msec.
+
+                                                                                                                                                  17
+    The Go scheduler maintains a FIFO (First-In-First-Out)                            (Section IV-B), one may suggest that Gethlighting can be
+local queue of runnable goroutines for each CPU core, re-                             prevented by simply increasing the timeout values (e.g., 5-
+sulting in an interleaved execution pattern of goroutines. That                       sec timeout for solicited block request). While an increased
+is, a preempted (or voluntarily scheduled-out) goroutine can                          message timeout can make Gethlighting attacks a little harder
+only be scheduled-in after all other runnable goroutines in the                       (because attacks need to induce longer delays), the current 5-
+queue have been executed. This execution pattern is depicted                          sec timeout is close to its maximum and it’s impractical to
+in Figure 15. It is worth noting that k (the number of                                further increase it in Ethereum. This is because the timeout
+consecutive execution slots occupied by goroutines handling                           is already too close to the average blocktime of 12-sec in
+TX-flooding messages) is a reciprocal of the number of CPUs                           Ethereum. An increased timeout (say 10-sec) would force
+and proportional to the number of Gethlighting peers.                                 Ethereum nodes to wait so much time for delayed block
+                                                                                      propagation that they might fail to finish a block reception
+E. Occupying Target’s Peer Connections                                                before the next block is generated.
+    We have logged all peer join/leave events of an Ethereum
+                                                                                      G. Absence of Ban Score Mechanism in Ethereum
+mainnet node by keeping the node online for a month. We
+simulate how many (benign) peer connections can be sustained                              Gethlighting is scalable and low-cost since a low-
+using the event logs, assuming that the connection slots that                         performance VM (e.g., t2.large of Amazon EC2) can
+become available (as short-lived connections leave) are imme-                         comfortably accommodate 10 attack nodes (Section V). During
+diately occupied by the adversary.                                                    Step-À in Section III, all Gethlighting peers stay idle, except
+                                                                                      for a periodic ping-pong, meaning that they neither inform any
+   Figure 16 shows our simulation results, showing how the
+                                                                                      blocks/transactions nor answer to any of the target’s requests.
+number of peer connections decay as the attacker begins from
+                                                                                      As a consequence, Gethlighting nodes’ hardware specification
+two hours to two weeks after the target node goes online.
+                                                                                      does not need to meet the Ethereum Foundation’s requirement
+Almost all incoming connection slots (i.e., 50 × 32 ≈ 33) of
+                                                                                      for blockchain synchorinization.17
+a two-hour-old node become unoccupied within only a few
+hours; however, a node that has been online for two weeks                                  One may suggest that the cost for Gethlighting can be
+can sustain a half of the total connections for more than ten                         easily magnified by adopting a peer banning mechanism
+days.                                                                                 similar to the Bitcoin’s ban score [17]. That is, if the target
+                                                                                      disconnects misbehaving (e.g., staying idle or not answering to
+                      50                                                              requests) peers by such a mechanism18 , Gethlighting adversary
+                                                                  2 hours
+                      45                                          4 hours             should roll out high-performing, thus more expensive, VMs
+                                                                  8 hours             (e.g., i3.xlarge) for blockchain synchronization in order
+                      40                                            1 day
+                                                                   2 days             to maintain persistent peer connections to the target. However,
+                                                                  1 week
+                      35                                                              it is inherently difficult to distinguish a non-chattering Geth-
+The number of peers
+
+
+
+
+                                                                 2 weeks
+                      30                                                              lighting node from a benign bootstrapping node, who is newly
+                                                                                      synchronizing the chain from the genesis.
+                      25
+
+                      20
+
+                      15
+
+                      10
+
+                      5
+
+                      0
+                                  5      10       15        20        25    30
+                                              Time (days)
+
+Fig. 16: Connection persistence as a function of client uptime.
+
+
+F. Timeout values in Geth
+   Geth defines three hard-coded timeout values in fetch-
+ing blocks with solicited messages16 : arriveTimeout
+of 500 milliseconds, gatherSlack of 100 milliseconds,
+fetchTimeout of 5 seconds. The time window for batch-
+processing of block announcements is set to 0.4s (i.e.,
+arriveTimeout - gatherSlack). A solicited block
+is considered failed if unanswered for 5 seconds (i.e.,
+fetchTimeout).
+   As the Gethlighting attack induces mild delay on peer                                17 https://ethereum.org/en/developers/docs/nodes-and-clients/
+messages in order to expire the above timers at the target                               18 Indeed, a candidate mechanism [40] has been designed and implemented
+                                                                                      by the Ethereum core developers. However, it is abandoned after a heavy
+           16 See          eth/fetcher/block_fetcher.go.                              discussion on its pros and cons.
+
+
+                                                                                 18
+

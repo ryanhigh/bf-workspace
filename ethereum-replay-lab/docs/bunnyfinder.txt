@@ -1,0 +1,1363 @@
+原子广播协议传统广播协议的区别？
+答：传统广播协议如gossip只保证消息的传播，但不保证顺序一致；原子广播应保证全部节点收到消息的顺序相同，进而的状态一
+致
+
+
+                  BunnyFinder: Finding Incentive Flaws for
+                           Ethereum Consensus
+                        Rujia Li∗¶ , Mingfei Zhang† , Xueqian Lu, Wenbo Xu‡ , Ying Yan‡ , Sisi Duan∗§¶
+                          ∗ Tsinghua    University † Shandong University ‡ Blockchain Platform Division, Ant Group
+                                         § Zhongguancun Laboratory, Shandong Institute of Blockchains
+                                    ¶ State Key Laboratory of Cryptography and Digital Economy Security
+
+                                  rujia@tsinghua.edu.cn, mingfei.zh@outlook.com, xueqian.lu@bitheart.org,
+                                      {xuwenbo.xwb,fuying.yy}@antgroup.com, duansisi@tsinghua.edu.cn
+                                                              Corresponding author
+
+
+       Abstract—Ethereum, a leading blockchain platform, relies on               validator that does not vote will suffer from penalties). The
+    incentive mechanisms to improve its stability. Recently, several             incentive mechanism has been very successful since the launch
+    attacks targeting the incentive mechanisms have been proposed.               of the PoS protocol. According to rated.network1 , more than
+    Examples include the so-called reorganization attacks that cause
+    blocks proposed by honest validators to be discarded to gain                 99% of validators operate correctly.
+    more rewards. Finding these attacks, however, heavily relies on              The relationships between the incentive mechanisms and
+    expert knowledge and may involve substantial manual effort.                  security of the system. The incentive mechanism of Ethereum
+       We present BunnyFinder, a semi-automated framework for
+                                                                                 is not perfect. Many attacks have been proposed on finding
+    finding i ncentive fl aws in Et hereum. Bu nnyFinder is in spired by
+    failure injection, a technique commonly used in software testing             the incentive flaws of Ethereum PoS [4]–[7] (see Table I),
+    for finding i mplementation v ulnerabilities. I nstead o f finding           some of which might pose a security threat to the system.
+    implementation vulnerabilities, we aim to find d esign fl aws. Our           For instance, the recently proposed staircase attack [6] has
+    main technical contributions involve a carefully designed “strat-            demonstrated that by controlling more than 29.6% stake, all
+    egy generator” that generates a large pool of attack instances,
+                                                                                 honest validators may suffer from no attestation incentives,
+    an automatic workflow t hat l aunches a ttacks a nd a nalyzes the
+    results, and a workflow that integrates reinforcement learning to            but Byzantine validators continue to receive rewards. Further-
+    fine-tune t he a ttack p arameters a nd i dentify t he m ost profitable      more, the attack can be launched continuously. Eventually,
+    attacks. We simulate a total of 9,354 attack instances using our             the fraction of stake controlled by the adversary exceeds the
+    framework and find t he f ollowing r esults. F irst, o ur framework          pre-specified 33.3% threshold, posing a security threat to the
+    reproduces five k nown i ncentive a ttacks t hat w ere previously            safety (i.e., no double spending) and liveness (i.e., transactions
+    found manually. Second, we find t hree n ew a ttacks t hat c an be
+    identified a s i ncentive fl aws. Fi nally an d su rprisingly, on e of our   are eventually finalized) properties of the system [8]. In fact,
+    experiments also identified t wo i mplementation flaws.                      even if the attack on the incentive mechanism does not have
+                                                                                 an impact on the security of the system, an inappropriate
+                             I. I NTRODUCTION                                    incentive mechanism may discourage honest validators from
+       Ethereum is a leading blockchain platform [1], [2] with                   participating in the system [9], lowering the robustness and
+    a market cap of 19 billion dollars [3]. After it upgraded to                 reliability of the system.
+    the Proof-of-Stake (PoS) consensus mechanism in Sep 2022,                    Finding the incentive flaws is challenging. It is not easy
+    it now heavily relies on the incentive mechanisms to ensure                  to find incentive flaws (e.g., honest validators receive much
+    the stability of the system. Namely, honest validators receive               lower rewards than the fair share), and existing works largely
+    rewards, and Byzantine validators (i.e., arbitrarily faulty val-             rely on expert knowledge and may involve substantial manual
+    idators) may receive penalties, so validators are encouraged to              effort. This difficulty mainly stems from two factors. First,
+    follow the specifications o f t he p rotocol. T he r ewards include          while formal models of blockchain incentives have been
+    the block rewards, transaction fees, and attestation rewards                 studied [13], [14], to our knowledge, no consensus mechanism
+    (i.e., every honest validator that votes correctly receives re-              has incorporated incentives in their security definitions. It
+    wards), etc. The penalties include the slashing conditions (i.e.,            is thus extremely challenging, if not possible, to rule out
+    a validator that equivocates will be penalized and eventually                incentive flaws. Second, the attack strategies can be very
+    removed from the system) and attestation penalties (i.e., a                  sophisticated. The staircase attack [6] mentioned above is a
+                                                                                 perfect example. In the attack, Byzantine validators collude
+                                                                                 and carefully control the concrete timing when the withheld
+                                                                                 blocks and attestations can be released. As a Byzantine
+                                                                                 validator may behave arbitrarily, enumerating all malicious
+    Network and Distributed System Security (NDSS) Symposium 2026                behaviors to discover new attacks is technically infeasible.
+    23-27 February 2026, San Diego, CA, USA
+    ISBN 979-8-9919276-8-0                                                         1 Rated.work:   https://explorer.rated.network/ (accessed in Nov 2024)
+    https://dx.doi.org/10.14722/ndss.2026.230281
+    www.ndss-symposium.org
+               TABLE I: Comparison of known incentive attacks and newly found incentive attacks by BunnyFinder.
+                                                                     Attack Strategy                                 Attack Result
+                                          Flaw                                                                                                       Identified
+  Scheme
+                                          Type          Content                     Order                                                           Ethereum
+                                                                                                                  Honest          Byzantine       Implementations
+                                                      Manipulation                Manipulation
+  Ex-ante reorg attack [5]                   I            block                head (short for h)                less reward         reward    Prysm 5.2.0; Teku 25.6.0
+  Sandwich reorg attack [10]                 I            block               head, modify parent                less reward         reward    Prysm 5.2.0; Teku 25.6.0
+  Unrealized justification attack [11]      III             -                         parent                       penalty           reward          Prysm 4.0.5
+  Justification withholding attack [12]     III           block                        head                        penalty           reward          Prysm 4.0.5
+  Staircase attack [6]                      III           block           source, h target, attestations           penalty           reward          Prysm 4.0.5
+  Selfish mining attack (this work)          I            block               head, modify parent                less reward         reward          Prysm 4.0.5
+  Staircase attack-II (this work)           III           block           source, h, target, attestations          penalty           reward          Prysm 5.2.0
+  Pyrrhic victory attack (this work)      II, IV   blocks, attestations                 all                 less reward&penalty      penalty   Prysm 5.2.0; Teku 25.6.0
+
+
+
+   Thus, an interesting and meaningful research question is:                              cation attack [11], the justification withholding attack [12],
+   Can we find the incentive flaws in Ethereum while involving                            and staircase attack [6]) have already been mitigated in the
+less manual effort?                                                                       recent Deneb upgrade of the codebase, we can reproduce these
+Our Approach. We propose BunnyFinder, a semi-automated                                    attacks on older versions.
+framework to find incentive flaws for the Ethereum PoS                                    ▷ Finding 2. Our framework identifies three new attacks of
+protocol. BunnyFinder is inspired by software testing tools                               the incentive flaws, as summarized below.
+such as penetration testing [15]–[18], chaos engineering [19],                            (1) We find a selfish mining attack, previously known as an at-
+[20], fuzz testing [21]–[24], and breach and attack (BAS)                                   tack on Proof-of-Work (PoW) and some PoS protocols [30]–
+simulation [25]. Different from software testing tools that                                 [33] but not Ethereum PoS [31]. To our knowledge, this
+often focus on implementation vulnerabilities or bugs, our                                  is the first known selfish mining attack to Ethereum PoS.
+framework focuses on the design flaws, especially incentive                                 After manual investigation, we show that by controlling only
+flaws. As summarized in Figure 1, our framework consists                                    13.4% stake, the attack is already profitable, i.e., Byzantine
+of four components: strategy generator, strategy executor,                                  validators gain more rewards than their fair share.
+state analyzer, and strategy optimizer. We use the strategy                               (2) We find a variant of staircase attack, and we call it
+generator to automatically generate attack instances. The                                   staircase attack-II. In this attack, honest validators suffer
+strategy executor automatically executes the corresponding                                  from penalties while Byzantine validators still continue to
+attack strategies. The state analyzer collects execution logs                               receive rewards. We show that by controlling 33.3% stake,
+to determine whether an incentive flaw has been triggered.                                  the attack can be launched so all honest validators suffer
+   Based on the identified incentive flaws, we further build a                              from penalties. Different from the staircase attack that can
+strategy optimizer, using reinforcement learning [26] to fine-                              be launched continuously in every epoch, staircase attack-
+tune the attack parameters, e.g., how much time each message                                II can only be launched for one more epoch with 1/9
+should be delayed. In this way, we can further refine the attack                            probability. Although Ethereum has provided a mitigation
+strategies to either increase the probability of launching the                              to the staircase attack, our result shows that the solution
+attacks or increase the “profit” of the attacks.                                            cannot fully mitigate its variant.
+  Responsible disclosure. We have disclosed our findings                                  (3) We find a novel attack called pyrrhic victory attack2 . In
+  to the Ethereum Foundation via both public channels,                                      our attacks, honest validators receive lower rewards than
+  meetings, and emails. All our discovered vulnerabilities                                  their fair share or even suffer from penalties, while Byzan-
+  have been reported and acknowledged. See Appendix A                                       tine validators also suffer from penalties [34]. We found
+  for more information.                                                                     many meaningful attack instances where honest validators
+                                                                                            suffer from higher incentive loss than Byzantine validators.
+Our findings. We implement our framework on two widely
+                                                                                          ▷ Finding 3. Although BunnyFinder is not intended to identify
+adopted Ethereum implementations, Prysm [27] and Teku [28].
+                                                                                          implementation vulnerabilities, our framework uncovers two
+Using our framework, we generate and run 9,354 attack
+                                                                                          such issues. First, we observe a deadlock in the synchroniza-
+instances, and all experiments last for about 120 hours. While
+                                                                                          tion module, which validators use to “catch up” with other
+many attack instances can be defined as incentive flaws, we
+                                                                                          validators, but no validator is able to complete synchroniza-
+identify ten useful attacks, including five known reorganization
+                                                                                          tion. The second issue happens in the log module, where non-
+attacks, three new attacks (as design flaws), and two imple-
+                                                                                          existent reorganization is reported in the log. While this does
+mentation flaws in Prysm, as summarized below. To further
+                                                                                          not affect the correctness of the system, it impacts our state
+clarify, we use incentive flaws to denote design issues, and
+                                                                                          analyzer and may complicate maintenance for developers.
+implementation flaws to denote implementation issues that are
+not directly related to the design. See Table I for a summary.                            Contributions. Our work makes the following contributions:
+▷ Finding 1. Our framework can cover most known reor-
+ganization attacks. Since some of the known attacks (e.g.,                                  2 A pyrrhic victory means a win that comes at such a great cost to the victor
+the sandwich reorg attack [10], [29], the unrealized justifi-                             that it is nearly equivalent to defeat.
+
+
+
+
+                                                                                      2
+                                                 Figure 1: Overview of our work.
+
+• We propose BunnyFinder, a framework for finding the                   Validators. Validators are the parties that participate in the
+  incentive flaws of the Ethereum PoS protocol. BunnyFinder             PoS protocol. Without loss of generality, we assume that there
+  exploits the idea of failure injection to build a workflow that       are n validators {v1 , v2 , ..., vn } while in practice n may change
+  automatically imports pre-defined attack instances, launches          over time. Each validator deposits 32 ETH as its stake. The
+  an experiment that simulates the attack, and analyzes                 stake of each validator represents its weight, which is useful
+  whether an incentive flaw exists.                                     during voting. For simplicity, we assume the weights of all
+• We implement and evaluate our framework on two widely                 validators are the same.
+  adopted Ethereum implementations. By running the 9,354                   Among n validators, up to f become Byzantine and fail
+  attack instances, our framework automatically covers five             arbitrarily. Since we assume the weights of all validators are
+  known reorganization attacks (although only one attack is             the same, and the number of validators is fixed, Ethereum as-
+  still feasible in the current version of Ethereum) and three          sumes n ≥ 3f + 1, which is optimal for partially synchronous
+  new attacks on the incentives of Ethereum. Additionally, as           consensus protocols.
+  a by-product, our framework identifies two implementation                In this work, we consider an adversary that may control up
+  flaws.                                                                to f validators, but the actual number of validators controlled
+• We conduct an in-depth analysis of the newly discovered               might be lower than f .
+  attacks. All new attacks we found have been validated and             Block and Attestation. A block b consists of the slot number,
+  reported. Some of them have been acknowledged by the                  a hash pointer to the parent block in the chain, a batch of
+  Ethereum Foundation and contributed to version updates in             transactions, and a set of attestations. Attestations are the votes
+  the Ethereum protocol.                                                of the validators. Each attestation att includes the slot number,
+                                                                        the hash of some block, and two hashes of the checkpoint (cp)
+          II. E THEREUM P O S AND ITS I NCENTIVE                        blocks, where a checkpoint is a specific block proposed at a
+                                                                        certain point of the protocol.
+  In this section, we briefly review the Ethereum PoS protocol.         Proposer and attestor. In each epoch, validators are divided
+Our notations mainly follow the Ethereum documentation [2],             into 32 committees and each committee is assigned to only one
+[35] and previous works [6].                                            slot. In each slot, all validators in the corresponding committee
+Epoch and slot. Ethereum PoS assumes that the network                   become attestors and become eligible to vote. Also, a single
+is partially synchronous, i.e., there exists an unknown upper           validator is chosen to be the proposer that is eligible to propose
+bound ∆ for message propagation and processing. In the                  a block. The identities of the committees and proposers are
+paper, our analysis focuses on the attacks when the network is          randomly selected and all validators can verify the identities
+synchronous, assuming that ∆ is known by all validators. In             of each other.
+Ethereum, time is divided into epochs. Each epoch includes              Finality. Ethereum PoS uses Casper FFG (Friendly Finality
+32 slots where each slot lasts for 12 seconds. For our purpose,         Gadget) [35] to finalize the blocks. A block is considered fi-
+we call four seconds (1/3 of a slot) a time unit.                       nalized when it has received a sufficient number of attestations.
+
+
+
+                                                                    3
+            The Ethereum Protocol for Validator vi                         fees are the fees each attestor receives after its attestations
+   global parameters: slot t                                               are finalized. Notably, the concrete values of the attestation
+   local parameters: block tree T , attestation set Atts.                  rewards are related to the participation rate, i.e., informally
+   −−−−−−−−−−−−−−−−−−−−−−−−−−−−−−                                          speaking, the total stake that votes for the same block. For
+   01 upon the beginning of a slot t do                                    example, if attestors that own 75% stake vote for the same
+   02     as the proposer for slot t
+   03     let head be the leaf block of the canonical chain
+                                                                           block and their attestations are finalized, these attestors receive
+   04     let atts be the set of newly received attestations               75% of the maximum attestation reward. Penalties, on the
+   05     let txs be the set of newly received transactions                other hand, include the slashing condition and attestation
+   06    build a block b = (P ROPOSE, t, vi , H(head), atts, txs)          penalties. The slashing condition penalizes validators that
+   07     Broadcast b to all validators                                    equivocate (i.e., validators that propose two conflicting blocks
+   −−−−−−−−−−−−−−−−−−−−−−−−−−−−−−
+   08 upon four seconds of a slot t do
+                                                                           or vote for two conflicting branches). Attestation penalties
+   09     as the attestor for slot t                                       penalize attestors whose attestations are not finalized (while
+   10     let head be leaf block of the canonical chain                    they are supposed to send these attestations).
+   11     let cp1 be the first checkpoint                                     We call both attestation rewards and attestation penalties
+   12     let cp2 be the last checkpoint                                   attestation incentives. Our current work focuses on the attes-
+   13    create att = (ATTEST, t, vi , H(head), H(cp1 ), H(cp2 ))
+   14     Broadcast the attestation att to all validators
+                                                                           tation incentives and block rewards.
+   −−−−−−−−−−−−−−−−−−−−−−−−−−−−−−                                                       III. OVERVIEW OF B UNNY F INDER
+   15 upon receiving a block b from the proposer vj do
+   16     T ←T ∪b                                                          A. BunnyFinder in a Nutshell
+   −−−−−−−−−−−−−−−−−−−−−−−−−−−−−−                                            As mentioned in the introduction and also shown in Fig-
+   17 upon receiving att from validator vj do
+   18     Atts ← Atts ∪ {att}                                              ure 1, our framework consists of four main components:
+                                                                           the Strategy Generator (SG), Strategy Executor (SE), State
+Figure 2: The Ethereum PoS Protocol. Codes are shown for                   Analyzer (SA), and Strategy Optimizer (SO). Briefly speaking,
+validator vi . H() denotes the hash function.                              the framework proceeds in two major phases.
+                                                                           Phase 1: Attack identification. In the first phase, the SG
+                                                                             generates a set of attack instances; the SE imports these
+Once a block is finalized, all blocks led by the block will never            attack instances into our locally deployed Ethereum testnet
+be reversed.                                                                 where a fraction of validators apply the corresponding attack
+Fork choice. Ethereum PoS uses the HLMD GHOST (Hybrid                        strategies; the SA collects the logs from the validators and
+Latest Message Driven Greedy Heaviest Observed Sub-Tree)                     analyzes whether each attack instance reveals an incentive
+fork choice rule [36] to determine the canonical chain. In-                  flaw. These three components are automatically conducted.
+formally, every proposer extends its canonical chain when it               Phase 2: Attack optimization. After some incentive flaws
+proposes a new block, and every attestor votes for its canonical             are identified, we manually investigate the execution logs
+chain. The HLMD GHOST rule selects the heaviest chain                        and classify the flaws into either existing attacks or new
+based on the number of attestations. We omit the details as                  attack types. For those new attack types, we extract the
+it is not relevant to our framework.                                         common attack strategies (e.g., withholding a block for
+                                                                             a certain number of slots), and then run SO to optimize
+Workflow. We show the pseudocode in Figure 2. The pro-
+                                                                             the attack strategies so that the attack is either easier to
+tocol proceeds in epochs and each epoch has 32 slots. At
+                                                                             launch or more profitable. To optimize the strategies, we use
+the beginning of a slot t, a proposer vi creates a block
+                                                                             reinforcement learning (RL), a machine learning approach
+b = (P ROPOSE, t, vi , H(head), atts, txs), where head is the
+                                                                             that is unique for performing optimization without training
+output of the fork choice, atts is a set of attestations, and txs
+                                                                             data. Attack optimization requires expert knowledge and is
+is the batch of transactions (line 1-7). After four seconds of
+                                                                             not fully automatic.
+slot t has elapsed, each eligible attestor vi creates an attestation
+att = (ATTEST, t, vi , H(head), H(cp1 ), H(cp2 )) and sends                B. The Challenges and our Solutions
+att to all validators in the same committee. Here, head is the                The main research challenge we address is finding effective
+output of the fork choice, and cp1 and cp2 are two checkpoint              attack strategies from a large space of attack instances and
+blocks (line 8-14). After receiving a message m from other                 then fine-tuning the attack parameters. Briefly speaking, there
+validators, m is added into each validator vi ’s local block tree          are two types of malicious behaviors of Byzantine validators:
+T (line 15-18), which is useful only for the fork choice rule.             order manipulation and content manipulation. Order manipu-
+The incentive mechanism. The incentive mechanism of                        lation changes the order of the messages each validator sends
+Ethereum includes both rewards and penalties. Rewards in-                  to other validators (by Byzantine validators). Meanwhile,
+clude block rewards, transaction fees, and attestation fees.               content manipulation changes the content of the messages.
+Block rewards are rewards each block proposer can receive                     Although there are only two types of malicious behaviors,
+after its proposed blocks are finalized. Transaction fees are the          the space of the concrete attack instances is enormous. Indeed,
+extra fees users pay to complete a transaction [37]. Attestation           each message may be modified arbitrarily and delayed for an
+
+
+
+                                                                       4
+arbitrarily long time. Additionally, the adversary may control          that trigger condition (1), i.e., consider the fair share as
+different fractions of Byzantine validators. As the fraction of         the rewards honest validators should receive in the failure-
+validators controlled by the adversary grows, the size of the           free case, an attack makes honest validators receive a lower
+message queues that need to be manipulated also grows. As               reward than their fair share or even suffer from penalties. For
+we cannot exhaustively enumerate every attack strategy, we              example, in the ex-ante reorg attack [4], the proposer will
+need to significantly reduce the space of the attack instances.         not receive its block rewards, and the attestors lose some
+Furthermore, even if an attack can be identified as an incentive        attestation rewards. In the staircase attack [6], the adversary
+flaw, we still cannot determine whether such an attack is the           makes half of the randomly chosen honest validators suffer
+most profitable one. Indeed, by slightly modifying the attack           from penalties. Accordingly, we should also consider whether
+strategies, the attack may cause higher impact.                         condition (2) is triggered and possibly the following cases:
+   Thus, we carefully design three components when designing            • If honest validators receive lower rewards than their fair
+our BunnyFinder framework: strategy generator (SG), state                  share, do Byzantine validators also receive lower rewards
+analyzer (SA), and strategy optimizer (SO).                                than their fair share or even suffer from penalties?
+SG: Reducing the space of attack instances. To reduce the               • If honest validators suffer from penalties, will Byzantine
+space of attack instances, we introduce several principles for             validators suffer from even higher penalties?
+the SG to generate effective attack strategies.                            Inspired by the definition of risk-free attacks [31], we can
+• (Not releasing the message earlier than expected.) In the             assess the attack instances. Let fs be the fair share (of rewards)
+  implementation of Ethereum, validators do not process the             of an honest validator. Let RB and Rh be the net pay-
+  messages with a slot number higher than its current local             offs of Byzantine and honest validators, respectively. Positive
+  slot number. Therefore, releasing a message earlier than              pay-off denotes a net reward; negative pay-off denotes a net
+  expected is meaningless.                                              penalty. An attack is meaningful whenever Rh < fs, i.e. honest
+• (Setting up discrete delay time.) We set up the delay time            validators earn less than their fair share. Based on (RB , Rh ),
+  of any message discretely where one unit is one-third of              we classify each instance as follows:
+  each slot, i.e., four seconds. We choose this optimization for        Metric I: Both Byzantine and honest validators receive re-
+  two reasons. First, every validator triggers some functions at           wards. In this case, the attack is meaningful only when the
+  each unit, e.g., line 08 of Figure 2 shows that each attestor            rewards honest validators receive are lower than their fair
+  prepares its attestation after four seconds have elapsed in              share. Namely, RB > 0 and Rh > 0 with Rh < fs.
+  each slot. Second, we consider a synchronous network and              Metric II: Both Byzantine and honest validators are penal-
+  all messages are delivered on time. This is in fact a weaker             ized. In this case, an attack is already meaningful, as
+  assumption than other timing models. Namely, if an attack                honest validators are penalized while they strictly follow
+  can be launched even when the network is synchronous, it                 the protocol. Namely, RB < 0 and Rh < 0.
+  can easily be launched when the network is asynchronous.              Metric III: Byzantine validators receive rewards, while hon-
+• (Carefully selecting fields for content manipulation.) We                est actions are penalized. An attack in this category may
+  carefully select the fields that can be modified in both the             create a significant impact on the stability of the system, as
+  block and the attestation data structures, such that the attack          the fraction of stake controlled by the adversary continues
+  strategies might be effective.                                           to grow and may eventually exceed the 33.3% threshold.
+   By adopting the principles above, we can greatly reduce the             Namely, RB > 0 and Rh < 0.
+number of concrete attack instances. Jumping ahead a little             Metric IV: Byzantine validators are penalized, while honest
+bit, our SG generates 9,354 attack instances (out of 12896                 validators receive rewards. Similarly, the attack is mean-
+theoretical attack instances), among which 3,121 are identified            ingful only when the rewards honest validators receive are
+as incentive flaws according to our criteria.                              lower than their fair share. Namely, RB < 0 and Rh > 0
+   Our SG approach is heuristic, so we can drastically reduce              with Rh < fs.
+the size of attack instances from a large space. We acknowl-               To quantify the attack’s impact, we introduce the Byzantine
+edge that novel attacks might be filtered. Unfortunately, we are        Advantage as BA = RB − Rh . A larger BA means that the
+not aware of any approach that can find novel attacks easily.           attacker’s net pay-off is higher while the honest validators’ net
+We leave it an interesting future work.                                 pay-off is lower. An attack is more effective if it has a larger
+SA: Evaluating the attack instances. Before we identify an              BA. An attack is more profitable if RB − fs is larger.
+incentive flaw, we need to formally define an incentive flaw.           SO: Optimizing the attack using reinforcement learning.
+According to previous work [38], [39], a good incentive mech-           After identifying an incentive flaw, it is important to determine
+anism, in general, should satisfy the following conditions:             whether by slightly modifying the attack strategies and fine-
+(1) Honest validators that follow the protocol should receive           tuning the attack parameters, a more profitable attack can be
+  rewards.                                                              found. In our work, we use reinforcement learning (RL) to
+(2) Byzantine validators that deviate from protocol specifica-          build SO. RL is well known for optimizing the long-term
+  tions should suffer from penalties.                                   rewards through trials. The main challenge we address is that
+   Most studies known so far focus on the incentive flaws               the reward of a validator may change while the system is
+
+
+
+                                                                    5
+running. Thus, it is hard to directly determine the “reward                block tree in the fork choice. To summarize, we consider
+function”, a crucial component for RL. To solve this problem,              modifying both parent and attestation fields for a block.
+we choose a delayed-reward reinforcement learning model                  • (Attestation) Similar to the discussion for the block, we
+and simulate the rewards of validators while running the RL                consider modifying slot and attestor fields meaningless for
+algorithm.                                                                 an attestation. The head field is the hash of each attestor’s
+   As we later show in the paper, using our RL-based SO, we                canonical chain. Meanwhile, the source and target fields
+are able to optimize two of our newly identified attacks: the              are two checkpoints. These three fields can be modified, a
+selfish mining attack and the staircase attack-II. For staircase           practice conducted by several known attacks [6], [41].
+attack-II, the attack becomes significantly more effective with          An example. We use the ex-ante reorg attack [4] as an example
+the optimization. The adversary can gain nearly twice the profit         to explain the attack strategies. The attack strategies are
+compared to the default attack (output of the SA component).             summarized in Figure 4. We summarize the message queues of
+In addition, the probability of launching the attack also im-            the validators when no attack is launched in Figure 6a and the
+proves from 35.0% to 97.0%.                                              message queues when the attack is launched in Figure 6b. The
+                                                                         legend shown in Figure 5 applies to Figure 6 and all following
+           IV. T HE B UNNY F INDER F RAMEWORK
+                                                                         figures.
+  We now present the details of our BunnyFinder framework.
+                                                                           • Order Manipulation in Slot 2: As a proposer, the
+A. The Strategy Generator (SG)                                               attacker delays its block for 3 units.
+   As mentioned in Sec. III, the SG automatically generates                • Content Manipulation in Slot 2: As an attestor, the
+some attack strategies. The basic strategies include order ma-               attacker sets the head field of the attestation to the
+nipulation and content manipulation. For order manipulation,                 hash of a withheld block.
+we use a message queue to denote the messages each validator
+is supposed to send. An adversary may modify its message                    Figure 4: Attack strategies in the ex-ante reorg attack.
+queue arbitrarily and determine when each message is sent
+to other validators. The adversary has no control over the                  In this attack, only one proposer needs to be Byzantine but
+message queue by honest validators.                                      all Byzantine validators modify and delay their attestations.
+                                                                         Both order manipulation and content manipulation are needed.
+struct Block {                                                           All Byzantine attestors perform the same strategy.
+  slot:             unsigned int64,
+  proposer:         unsigned int64,
+  parent:           Hash,             // Can modify                              Icons      Description
+  transactions:     Vec<Transaction>,
+  attestations:     Vec<Attestation> // Can modify                                          The block from an honest validator
+}
+                                                                                            The block from a Byzantine validator
+struct Attestation {                                                                        The attestations from honest validators
+  slot:     unsigned int64,
+  attestor: unsigned int64,                                                                 The attestations from Byzantine validators
+  head:     Hash,                         // Can modify
+  source:   Checkpoint,                   // Can modify                                     An action that points a block to its parent block
+  target:   Checkpoint                    // Can modify
+}                                                                                           The action of an attestation voting for a block
+
+   Figure 3: The data structures of block and attestation.                               Figure 5: The legend of all figures.
+   For content manipulation, we have further identified several          Implementation details. In our implementation, we define
+fields that might generate effective attack instances. We show           a strategy specification format (SSF) in the form of JSON,
+the data structure of a block and an attestation in detail in            specifying the exact time each message should be delayed and
+Figure 3. We perform the following optimizations for content             what content the message should be modified for the Byzantine
+manipulation.                                                            validators. The SSF file is defined as some JSON templates
+• (Block) The slot field denotes the slot number. The proposer           for both order manipulation and content manipulation. Based
+   field denotes the identity of the block proposer. As all              on the concrete attack strategies (e.g., the number of units
+   validators can verify the identity of the block proposer, these       each message should be delayed), the corresponding template
+   two fields can not be modified. The parent field denotes              is “filled”. To be specific, in each slot, our SSF defines three
+   the hash of the parent block. This field can be modified, a           factors: slot denotes the slot Byzantine validators should take
+   trick used by several known attacks [4], [6], [11], [40]. The         the actions, and actions denotes the attack strategies. One
+   transactions field includes a batch of transactions. This field       SSF file contains attack strategies for all slots in one epoch.
+   is irrelevant to the attestation incentives. The attestations            An example of a particular slot (e.g., slot 2) for the ex-
+   field includes a set of attestations. This field is crucial as        ante reorg attack for a Byzantium validator is shown in
+   each validator determines the weight of the branches in its           Figure 7. In this example, AttestBeforeSign denotes the
+
+
+
+                                                                     6
+          v2                                                                       B. The Strategy Executor
+                                                    b2
+                                                                                      The Strategy Executor mainly consists of two components:
+                                              a
+                                                                                   Attacking Scheduler (AS) and Byzantine Simulator (BS). AS
+          v1
+                                    b1                                             contains two components: Strategy Translator (ST) and In-
+                                                                                   struction Dispatcher (ID). The ST parses the attack instances
+          v0
+                                                                                   (generated by SG) written in JSON according to our SSF, and
+                   b0                                               Time           translates the corresponding attack strategies into executable
+                        slot 0           slot 1          slot 2                    code (instructions) in the codebase of the Ethereum imple-
+                                                                                   mentation. ID interacts with the BS to further instruct the BS
+    (a) The message queues of three validators when no attacks are                 during the attack. The BS defines a set of injection points in
+    launched. Validators v0 , v1 , v2 all behave honestly in this case. Each
+    block is proposed on time and all honest attestors vote for these              its client, retrieves the corresponding instructions from the ID
+    blocks in each slot.                                                           at runtime, executes these instructions at the injection points,
+         v2                                                                        and broadcasts the execution results to the network. We also
+                                                    b2                             build a strategy pool to store executable code so the complex
+                                                                                   attack strategies can be launched according to the instructions.
+         v1                                  a                                     We discuss more implementation details in our full version.
+                                                         b1
+                                                                                   A running example (Figure 8). The process of attack in-
+                                                                                   jection proceeds as follows: ⃝   1 When the probe of BS is
+         v0
+                  b0                                               Time            triggered (at the .BlockBeforeBroadcast position), it
+                        slot 0           slot 1          slot 2
+                                                                                   sends a request to the Instruction Dispatcher (ID). The current
+                                                                                   thread of the Byzantine Simulator is set as the suspended
+(b) The message queues of three validators when the ex-ante reorg                  state. ⃝2 Upon receiving further instruction, ID first parses
+attack is launched. Validator v1 is Byzantine and applies the attack               the request and then looks up the strategy pool to determine if
+strategies in Figure 4. Block b1 is delayed and released at the
+beginning of slot 2. All Byzantine validators modify the head field                a local instruction is needed for BlockBeforeBroadcast.
+of their attestation a as b1 , although their fork choice rule outputs             There are two possible outcomes:
+b2 . After b1 is launched, b2 is re-organized.                                     • If no instruction is needed, the ID directly returns the remote
+Figure 6: The message queues of three validators in the failure-                      instruction CMD_NULL to the BS.
+free case and under the ex-ante reorg attack [4]. Validator                        • If an instruction is found, the ID executes the local instruc-
+v0 , v1 , and v2 are eligible proposers for block b0 in slot 0,                       tion (e.g., delayWithDuration) and returns the remote
+block b1 in slot 1, and block b2 in 2, respectively.                                  instruction to BS.
+                                                                                      After the instruction is executed, ⃝  3 BS receives the in-
+
+injection point that controls the head field of the attesta-                       struction response from the ID. ⃝   4 BS performs the remote
+
+tion. Here, modifyAttestHead:2 means that head field                               instruction, and the suspended thread is resumed.
+of the attestation in slot 2 is set as the hash of a block
+                                                                                   C. The State Analyzer
+withheld in slot 2. In addition, BlockBeforeBroadcast
+denotes the injection point used to delay sending the block.                         As mentioned in Sec. III-B, the State Analyzer (SA)
+delayWithDuration:3 means that the block in slot 2 is                              analyzes the execution results and determines whether the
+withheld for three units, i.e., 12 seconds.                                        corresponding attack is an incentive flaw. We discuss the
+                                                                                   implementation details in our full version.
+{
+     "slots": [{                                                                   D. The Strategy Optimizer
+       "slot": "2",
+       "actions": {                                                                  We use reinforcement learning to instantiate the strategy
+         "AttestBeforeSign":"modifyAttestHead:2",                                  optimization module. We are particularly interested in fine-
+         "BlockBeforeBroadcast":"delayWithDuration:3",
+       }                                                                           tuning the attack strategies to improve the profit of the attacks.
+     }]                                                                            Review of reinforcement learning. Reinforcement Learning
+}
+                                                                                   (RL) is a machine learning paradigm where an agent interacts
+Figure 7: An example of the JSON file that denotes the                             with an environment over a sequence of steps (each step is
+strategies in Figure 4. Some JSON fields denote modifying                          numbered by t) to learn behaviors that maximize cumulative
+the fields of block/attestation shown in Figure 3. For example,                    reward [26]. Formally, an RL problem is modeled as a Markov
+modifyAttestHead means modifying the “attestation head”                            Decision Process (MDP), defined by the tuple (S, A, P, R),
+field of the attestation.                                                          where S is the set of all possible states S = {s1 , · · · }, A is
+   Our SSF can be easily extended. For instance, if new                            the set of actions available to the agent A = {a1 , · · · }, P is the
+injection points are needed, more JSON fields can be added                         transition function, and R is the reward function. The policy
+to SSF to connect SG with other modules. We provide more                           function is denoted as st+1 = P (st , at ). The reward function
+examples in Appendix B.                                                            is denoted as rt+1 = R(at , rt ), where r is the reward.
+
+
+
+                                                                               7
+                                        Figure 8: Example of injection apply workflow.
+
+   The agent is the learner, also known as the decision maker.         delayed-reward reinforcement learning task and use a recurrent
+It observes the environment, selects actions, and adapts its           actor-critic model [42] trained with Proximal Policy Optimiza-
+behavior based on the outcomes of those actions. The agent’s           tion (PPO) [43]. The choice is motivated by the sequential and
+goal is to discover a policy P that maximizes its cumulative           partially observable nature of our environment. In addition,
+reward over time.                                                      our reward function is defined as the difference between the
+   The environment interacts with the agent. The environment           reward of the honest validator and its fair share.
+keeps track of the state of the “world”, including the process,           As mentioned previously, in the Ethereum PoS protocol,
+previous history, and restrictions of the world. In each step          the reward of a validator changes over time, and can only
+of the algorithm, the environment receives the agent’s action,         be determined after some blocks are finalized. The immediate
+updates its internal state, and returns a new observation of the       feedback would be misleading or even counterproductive. We
+world that can be seen from the agent and the reward.                  thus cannot compute the rewards in each step. We therefore use
+   The state is a representation of the current situation faced        the actor-critic framework. Namely, the actor learns a policy
+by the agent. The state can be fully observable (as in standard        for selecting actions, while the critic estimates the value of
+Markov Decision Processes), or only partially observable by            states to support advantage-based learning. We augment the
+the environment, in which case the agent must infer hidden             architecture with a recurrent memory module (LSTM) [44] to
+information using its observation history or memory.                   enable temporal credit assignment, i.e., the ability to connect
+   The action is the decision made by the agent at each step.          actions with the outcomes that can only be observed in the
+Actions influence how the environment evolves, and the agent           future. The LSTM maintains temporal context over multi-slot
+must learn which actions lead to favorable outcomes over time.         attack sequences, tracking proposer duties, chain weights, and
+Workflow of reinforcement learning. In each step t, the                justification progression. PPO further stabilizes training by
+agent observes a state st from the environment, selects an             constraining policy updates and supporting efficient learning.
+action at from a predefined action space, and receives a scalar        Agent and Environment. In our system, we model the agent
+reward rt (see Figure 9). The environment then transitions to a        as the adversary that controls all Byzantine validators. The
+new state st+1 according to its (possibly stochastic) dynamics.        environment simulates a minimal Ethereum 2.0 blockchain
+The agent’s objective is to learn a policy that maximizes the          system, implementing the core elements related to the rewards
+expected cumulative reward over time.                                  of the validators. Specifically, we are interested in components:
+                                                                       the Hybrid LMD-GHOST fork choice rule and the Casper FFG
+                                                                       finality gadget. Conceptually, the environment represents an
+                                                                       Ethereum 2.0 network consisting of all honest validators, and
+                                                                       defines the rules on how blocks are proposed, attestations are
+                                                                       sent, and rewards are computed.
+                                                                          We abstract away the workflow of Ethereum PoS protocol
+                                                                       to integrate with the reinforcement learning framework. First,
+                                                                       we map the notion of slots (in Ethereum) to steps (in RL).
+                                                                       The protocol is no longer time-driven, but action-driven. Each
+                                                                       RL step corresponds to one complete slot. In each step,
+                                                                       the environment receives an action from the agent (i.e., the
+                                                                       adversarial validator), updates the internal state of the chain,
+       Figure 9: Schematic of our strategy optimizer.                  and computes the outcome according to our specification
+                                                                       above. Second, we introduce attack-specific modifications to
+Problem formulation. We formulate our problem as a                     the environment. These changes allow us to focus on how the
+
+
+
+                                                                   8
+modified attack strategies can improve the outcome.                    basic attack strategies to generate the attack instances. It is
+   The state and action space are defined according to each            thus not that surprising that our framework can cover known
+attack instance. We defer the discussion to Appendix D. To             attacks. We have reproduced these attacks in both Prysm
+summarize, SO can improve the success rate of our selfish              and Teku. Meanwhile, although some of the attacks are also
+mining attack and the staircase attack-II. Additionally, SO can        covered by our framework, they have been mitigated in the
+decrease the stake requirement of the adversary of our selfish         recent Deneb upgrade of the codebase, i.e., post-Prysm version
+mining attack and increase the profit of our staircase attack.         5.0 and post-Teku version 24.2.0. We are able to reproduce
+The results are summarized in Sec. III.                                these attacks on older versions.
+Extending BunnyFinder to other chains. BunnyFinder can                    We also find three new incentive attacks: selfish mining
+be extended to other blockchains in the propose-vote paradigm.         attack, staircase attack-II (i.e., a variant of the staircase attack),
+Namely, the SG can be adapted by redefining the attack space,          and pyrrhic victory attack. All the three attacks apply to both
+and the SE only requires updating injection points. Such               Prysm and Teku implementations. Finally and surprisingly, we
+changes require additional engineering efforts. The SA and             find two implementation flaws in the synchronization module
+SO are chain-agnostic and are more general.                            and log module in the Prysm implementation. These flaws do
+                                                                       not appear in the Teku implementation.
+                  V. T HE N EW I NCENTIVE F LAWS                          Note that besides the fact that our tool can identify new in-
+ We run our BunnyFinder framework to find incentive flaws.             centive flaws, we consider our newly found attacks interesting,
+We summarize our new findings in Table I.                              as many prior works focus on reporting new attacks [4]–[7]
+                                                                       (based on manual work).
+Experimental setup. We conduct our experiments on AWS
+EC2, using up to three c5.4xlarge instances (each with 16                   No.     Metrics      Count    Ratio    Attack Example
+vCPU and 32 GB memory). We deploy a local Ethereum 2.0
+testnet to evaluate Byzantine behaviors within a controlled                  1      Metric-I     2586    82.86%    Selfish mining attack
+environment. Our codes are publicly accessible3 . Details of                 2      Metric-III     2     0.64%     Staircase attack-II
+our experimental setup can be found in Appendix C.
+                                                                             3      Metric-II     466
+Details about the evaluation and validation process. Using                                               17.07%    Pyrrhic victory attack
+our SG, we generated 9,354 attack instances. Our SE executed                 4      Metric-IV     67
+all attack instances, and the experimentation lasted for 145
+                                                                                  TABLE II: Summary of the incentive flaws.
+hours. To identify whether each attack is an incentive flaw,
+we extract the execution logs and query them via SQL
+queries. Specifically, we collect the incentives received by the       A. Selfish Mining Attack
+validators and classify them according to the metrics. Among              Selfish mining is a well-known attack against Proof-of-
+all 9,354 attack instances, 3,121 of them can be identified as         Work (PoW) based blockchains (e.g., Bitcoin [45], Ethereum
+incentive flaws according to our metrics. We summarize the             1.0) [30]. In such an attack, a mining pool that controls a
+incentive flaws in Table II.                                           fraction of computational power may collude and gain more
+   To further assess the attack instances, for each metric             profit than its fair share. Recently, several works found that
+category, we identify the top 20% most profitable instances            PoS also suffers from selfish mining [31]–[33]. A selfish
+and manually analyze their corresponding attack strategies. If         mining attack is one type of reorganization attack where
+multiple instances exhibit similar behavior, such as differing         blocks from honest validators are discarded. However, a selfish
+only in delay length or minor parameter variations, we group           mining attack has not been found for Ethereum PoS yet [31].
+them into the same class. For each class, we select the most              We identify the first selfish mining attack for Ethereum
+effective strategy and apply RL as mentioned in our strategy           PoS. We show our JSON configuration file in Figure 11
+optimizer (SO). The optimized strategies are re-evaluated via          and illustrate the attack in Figure 10. In this attack, the
+SE and SA. If the optimized attack instances belong to certain         Byzantine validator withholds its blocks, strategically releasing
+metrics, they are added to the corresponding category. In total,       them at an optimal time to maximize rewards. The delayed
+we have manually evaluated 300 attack instances and identified         blocks accumulate a larger “weight” (i.e., a higher number of
+three new incentive flaws.                                             attestations) than the blocks produced by honest validators.
+Overview of our results. By further classifying the attack             Under the HLMD-GHOST fork choice rule [36], the delayed
+instances, our framework successfully reproduces five known            block replaces the honest validator’s block in the canonical
+incentive attacks, including the ex-ante reorg attack [4], sand-       chain.
+wich reorg attack [10], justification withholding attack [12],            The effect of our selfish mining attack mirrors that of the
+unrealized justification attack [11], and staircase attack [6].        original selfish mining attack: both Byzantine and honest val-
+We do not claim too much novelty in covering known attacks.            idators receive rewards, but the rewards for honest validators
+Specifically, our SG is inspired by known attacks and use their        are lower than their fair share. This attack aligns with Metric
+                                                                       I in our criteria. As shown in Figure 12, the rewards for
+  3 Our   codebase: https://doi.org/10.5281/zenodo.17042549            honest validators are lower than their fair share and the rewards
+
+
+
+                                                                   9
+                                                                                 {
+                                                                                   "slots": [{
+                                                                                     "slot": "1",
+                                                                                     "actions": {
+                                                                                       "AttestBeforeSign":"modifyAttestHead:1",
+     b0                       b1                                   Time                "BlockBeforeBroadcast":"delayWithDuration:1",
+          slot 0           slot 1            slot 2           slot 3                 },
+                                                                                     "slot": "2",
+ (a) In slot 0, the honest validator proposes a block b0 and the                     "actions": {
+ attestors vote for b0 . In slot 1, the adversary delays its block b1 for              "AttestBeforeSign":"modifyAttestHead:1",
+                                                                                     },
+ four seconds. Therefore, the honest attestors vote for b0 . Byzantine               "slot": "3",
+ attestors set the head field of attestations as the delayed block b1 .              "actions": {
+                                                                                       "BlockGetNewParentRoot":"modifyParentRoot:1",
+                                                                                 }}]}
+
+                                                                                 Figure 11: An example of JSON file for selfish mining attack.
+                                       b2
+                                                                                                         1
+     b0                      b1                                   Time
+          slot 0           slot 1           slot 2            slot 3                                    0.8
+
+
+
+
+                                                                                      Ratio of Profit
+                                                                                                                   Honest Validators, No Attack
+(b) In slot 2, the honest validators propose a block b2 and tries                                       0.6
+to reorganize the delayed block b1 due to the honest reorg mecha-                                                  Honest Validators, Under Attack
+nism [46]. In addition, honest attestors vote for b2 , while Byzantine                                             Adversary, No Attack
+                                                                                                        0.4        Adversary, Under Attack
+attestors vote for b1 instead.
+                                                                                                        0.2
+
+                                                                                                         0
+                                       b2                                                                     0 5 · 10−2 0.1 0.15 0.2 0.25           0.3
+                                                                                                                       Ratio of Adversarial Stake
+     b0                      b1                          b3       Time
+                                                                                 Figure 12: Profit of Byzantine validators and honest validators
+          slot 0           slot 1           slot 2            slot 3             using the selfish mining strategy for different stake ratios,
+(c) In slot 3, the adversary proposes a block b3 . The head of block             compared to the case without attack.
+b3 is set as block b1 instead of the output of fork choice, i.e., b2 .
+As the chain led by b3 receives more attestations than the chain led
+by b2 , the chain led by b3 becomes the canonical chain. Therefore,                 We find a new variant of the staircase attack, denoted as
+block b2 is orphaned.                                                            staircase attack-II. As shown in Figure 17, staircase attack-
+Figure 10: The message queues of three validators in the                         II requires the proposers of the first slot of two consecutive
+failure-free case and under our new selfish mining attack. The                   epochs to be Byzantine.
+Byzantine validators apply the attack strategies in Figure 11.                      As shown in Figure 13, at the beginning of epoch 0, the
+                                                                                 adversary delays its block b0 in slot 0 for four seconds.
+                                                                                 Therefore, the target of attestations from honest validators in
+for Byzantine validators are higher than their fair share. In                    slot 0, i.e., block b, is different from the target of attestations
+addition, the loss ratio depends on the stake owned by the                       in slots 1-31, i.e., block b0 . In addition, all attestations from
+adversary. The higher the stake owned, the lower the ratio of                    the adversary are delayed forever. Accordingly, the number of
+honest validators’ profits.                                                      attestations from honest validators with the same target and
+   Similar to the selfish mining attacks, the profit of the                      source cannot reach 2n/3. Block b0 , which is supposed to be
+adversary grows as the fraction of stake controlled by the                       justified in epoch 0, cannot be justified by the attestations from
+adversary grows, as shown in Figure 12.                                          honest validators. In contrast, the adversary can justify the
+   Note that, as summarized in Table II, most of our generated                   block in slot 0 by releasing its last block in epoch 0, i.e., block
+attack instances (that are incentive flaws by our metrics) be-                   b31 . This block includes the attestations from the adversary, so
+long to selfish mining. This is not surprising, as the adversary                 the number of attestations exceeds two-thirds. The adversary
+only needs to launch a reorganization attack to gain additional                  delays the block for two epochs. As a result, the block in slot 0
+rewards. This is easier to launch than other attacks.                            can be justified at the end of epoch 2. In epoch 1, the adversary
+                                                                                 conducts the same strategies. Particularly, the adversary delays
+                                                                                 the block b32 for four seconds and delays all attestations from
+B. Staircase Attack-II
+                                                                                 the adversary. Therefore, the honest validators cannot justify
+   Staircase attack is a recent attack on the attestation incen-                 the block in epoch 1. After block b31 is released in epoch 2,
+tives [6], as discussed in the introduction. The attack was                      block b0 is justified. As the chain from honest validators does
+mitigated via the Deneb upgrade, i.e., after Prysm version 5.0.                  not justify any new block, the chain led by b31 is the new
+
+
+
+                                                                            10
+canonical chain. All attestations included in the chain from                           line are all effective, as the loss rate of the adversary is
+honest validators are discarded.                                                       lower than that of honest validators. The most effective one
+                                                                                       is highlighted, where the adversary loses 5.1% of its incentive
+                                              b31 includes attestations from           awards to make honest validators suffer from 19.9% loss.
+                                              the adversary and is delayed
+
+                                                                                             v2
+     b          b0            …         b30                b31                                                                            b2
+                                                                           Time
+             slot 0               …            slot 30           slot 31
+                                                                                             v1
+ (a) In epoch 0, the adversary delays its block in slot 0 for four                                                       b1
+ seconds. In addition, all attestations from the adversary are delayed
+ forever. In contrast, block b32 from the adversary in slot 31 includes
+                                                                                             v0
+ all attestations from the adversary. b32 is delayed to the end of                                         b0                                                Time
+ epoch 2 (see Figure 13c).
+                                                                                                                slot 0           slot 1         slot 2
+
+                                                                                       Figure 14: The message queues of three validators when
+    b30        b32            …         b62               b63          Time            the basic pyrrhic victory attack is launched. Validator v1 is
+            slot 32             …             slot 62            slot 63               Byzantine and applies the attack strategies in Figure 19. All
+                                                                                       attestations from the adversary are withheld forever.
+(b) In epoch 1, the adversary conduct similar strategies. In partic-
+ular, the adversary delays its block in the first slot in epoch 1 for                  Further experimentation and analysis. Based on the basic
+four seconds and delays its attestations forever.                                      strategies of the most effective attack instance we identified,
+                                                                                       i.e., the highlighted point in Figure 15a, we further fine-
+                                                                                       tune the concrete attack parameters to explore more profitable
+                                                          b31                          attack strategies. For example, we increase the delay time for
+                                                                                       Byzantine validators. Accordingly, we generate another 2,010
+    b30       …         b64             …                 b95          Time            new optimized attack instances. As shown in Figure 15b, the
+                              slot 64          …                 slot 95               number of effective attacks has increased from 60.78% to
+                                                                                       70.78% after the optimization.
+(c) In epoch 2, the delayed block b31 is released at the end of
+epoch 2. After b31 is released, all blocks in epoch 1 and epoch 2                         We now discuss one effective example. As shown in Fig-
+are reorganized and the attestations included are discarded.                           ure 18, besides the attestations in slot 0 and slot 1, all attesta-
+                                                                                       tions from the adversary are delayed forever. In addition, the
+Figure 13: The message queues of three validators in staircase                         proposers for blocks from slot 31 and slot 32 are Byzantine.
+attack-II. The Byzantine validators apply the attack strategies                        Both b31 and b32 are withheld and released after four seconds
+in Figure 17.                                                                          have elapsed in slot 32. Before b31 and b32 are released, only
+                                                                                       the attestations from slot 0 to slot 30 are included in the
+C. Pyrrhic Victory Attack                                                              canonical chain. Let the source of the attestations be genesis
+   We find a new attack in which Byzantine validators suffer                           block and the target be b0 . After b31 and b32 are released, the
+from penalties, but honest validators receive lower rewards or                         attestations in slot 32 have the wrong source and target, since
+even suffer from penalties. As Byzantine validators also suffer                        the correct source of the attestations should be b0 and the
+from penalties, we call it a pyrrhic victory attack.                                   target be b32 . Therefore, the corresponding validators suffer
+   A basic pyrrhic victory attack is straightforward. For ex-                          from attestation penalties. As the attestations from Byzantine
+ample, a pyrrhic victory attack can be launched based on                               validators besides slot 0 are delayed forever, the adversary also
+the following strategy: All Byzantine validators delay their                           suffers from penalties as its attestations are not released. This
+attestations every block forever (see JSON file in Figure 19).                         attack falls into metric II in our criteria.
+Without sending any attestations, all Byzantine validators
+suffer from penalties. Meanwhile, these actions also decrease
+the participation rate of the validators, as discussed in Sec. II.                           b0                          …                 b31           b32 Time
+Accordingly, honest validators’ rewards are lower than their                                                                 …
+                                                                                                  slot 0                                       slot 32
+fair share. This attack falls into metric IV in our criteria.
+   In the simple attack, the adversary suffers from a higher                           Figure 16: The message queues of an effective pyrrhic victory
+reward loss than the honest validators. In particular, the                             attack. The adversary applies the attack strategies in Figure 18.
+rewards of honest validators are approximately 67% of their                            All attestations in slot 1 to slot 31 from the adversary are
+fair share, while the loss rate of the adversary is about 180%.                        withheld forever. The adversary also delays block b31 in slot 31
+We do not consider this attack effective as the loss rate of the                       and block b32 in slot 32 and releases them after four seconds
+adversary is higher than that of honest validators.                                    have elapsed in slot 32. After b31 and b32 are released, the
+   We show the loss rates of both the adversary and honest                             target and source of attestations from honest validators in slot
+validators in Figure 15a. The attack instances above the dashed                        32 are set wrongly.
+
+
+                                                                                  11
+                                                                                                      implementations of Ethereum (i.e., Teku) do not suffer from
+  Loss Rate of Honest Validators (%)                                                   Density        such issues as block sync module is implemented differently.
+                                                Effective Instances                                   Incorrect log. Another relatively minor finding we found
+                                       40                                                   40        is an issue due to logging. In particular, the reorg logger
+                                                        (5.1, 19.9)                                   checks whether there is a reorganization in the canonical chain.
+                                                                                                      However, due to the inconsistent invocation of the outdated
+                                                                                                      functions, the reorg logger may be triggered in situations
+                                       20                                                   20
+                                                                                                      where no reorg has happened, creating non-existent reorg logs.
+                                                                                                      While this does not affect the protocol, it does affect our state
+                                                                                                      analyzer component.
+                                       0                                                    0
+                                            0         10     20     30      40    50                       VI. O PTIMIZING THE ATTACKS USING S TRATEGY
+                                                     Loss Rate of Adversary (%)                                     O PTIMIZER AND D ISCUSSION
+(a) Loss rate of adversary and honest validators before optimization.                                    SO discovers strategies that significantly improve attack ef-
+                                                                                                      fectiveness compared to default approaches. Using our strategy
+  Loss Rate of Honest Validators (%)
+
+
+
+
+                                                                                       Density        optimizer, we are able to optimize both selfish mining attack
+                                                Effective Instances
+                                                                                                      and staircase attack-II. We summarize our findings in Table III.
+                                                                                                      In this table, we compare the optimization results of the default
+                                       40                                                   40        strategy and the RL-optimized strategy, where the default
+                                                                                                      strategy is defined as a staircase attack-II instance identified by
+                                                                                                      our state analyzer. To evaluate the incentives, we define three
+                                       20                                                   20        metrics. The first metric is Byzantine Advantage (BA), which is
+                                                                                                      defined as the difference between the average reward obtained
+                                                                                                      by a Byzantine validator and that of an honest validator under
+                                       0                                                    0         the same strategy: BA = Byzantine Reward−Honest Reward.
+                                            0         10     20     30      40    50
+                                                                                                         This metric reflects the difference between the expected
+                                                     Loss Rate of Adversary (%)                       rewards in the attacks and the validators’ fair share. A higher
+ (b) Loss rate of adversary and honest validators after optimization.                                 BA indicates that the attack is more profitable.
+                                                                                                         The second metric is BA Rate, which normalizes the ad-
+Figure 15: The loss rate of the adversary and honest validators                                       vantage against a baseline (i.e., in our case, an incentive flaw
+under the Pyrrhic victory attack. The loss rate is calculated by                                      generated by our SG):
+dividing the number of reward losses by the fair share. The
+area above the dashed line represents effective attack instances                                                            Byzantine AdvantageRL-optimized
+                                                                                                               BA Rate =                                    .
+where honest validators suffer from higher incentive loss than                                                                Byzantine AdvantageDefault
+Byzantine validators. The ratio of effective attack instances                                            The third metric is Attack Success Rate (ASR). ASR mea-
+increases after optimization.                                                                         sures the success rate of a strategy when applied to the system,
+D. Implementation Vulnerability                                                                       where success is defined as the ability of the strategy to reduce
+                                                                                                      the rewards of honest nodes.
+Synchronization issues. During one of our experiments, we                                                As shown in Table III, the RL-optimized attack achieves a
+encountered a deadlock issue for the synchronization module.                                          BA of 27.2. In contrast, the default attack achieves a BA of
+In Ethereum, the synchronization module is used to catch                                              13.4. The BA Rate is approximately 2.03, i.e., the RL-based
+up with the other validators when the validator realizes that                                         optimization doubles the profit of the attack compared to the
+it falls behind. Specifically, when a validator falls behind,                                         default attack. Meanwhile, the attack success rate increases
+it will not work until it finishes synchronization. When we                                           from 35.0% to 97.0%. This indicates that the RL-optimized
+launch the staircase attack-II, all validators stop querying the                                      attack is significantly more effective than the default attack.
+synchronization module. In particular, each validator maintains
+two local parameters: its best epoch (based on the head block)                                        A. Selfish Mining
+and others’ best epoch (representing other validators’ head                                              Due to space limitation, we present the details of using
+blocks). When a validator’s best epoch falls behind others’                                           reinforcement learning to optimize the attack in Appendix D.
+best epoch, it queries the synchronization module to catch up.                                           In the default selfish mining strategy generated by SA, the
+Once the staircase attack-II is conducted, all honest validators                                      adversary adopts a static strategy: it tries to delay the block
+believe that they fall behind and no validator can complete the                                       in slot t for 4 seconds and propose the block in slot t + 2.
+synchronization.                                                                                         After the optimization by SO, the agent learns a more
+   After confirming the root cause, we believe this was an                                            adaptive strategy. Namely, the agent dynamically adjusts its
+implementation vulnerability of the synchronization module                                            block release time based on whether Byzantine validators
+in the Prysm codebase only (Golang implementation). Other                                             become proposers in the future. If so, the agent chooses to
+
+
+
+                                                                                                 12
+further withhold their blocks. In this way, the adversary can                            In the default staircase attack-II generated by SA, the
+gain higher profit. Also, the agent dynamically changes the                           adversary strictly follows the same strategy. Namely, each
+attack strategy when the stake controlled by the adversary is                         Byzantine validator withholds all its attestations. This makes
+lower.                                                                                the adversary suffer from penalties if the withheld chain cannot
+   By applying SO, the optimized attack achieves a substan-                           reorganize the canonical chain later.
+tially higher success rate. In our experiments, the success rate                         In contrast, after the optimization by SO, the agent learns
+is nearly 100%. In some experiments, the stake the adversary                          a dynamic and state-aware strategy. In particular, instead of
+needs to own to launch the attack drops by over 20%.                                  withholding every attestation and delaying its block for two
+Minimum requirement for selfish mining. After further                                 epochs, the agent selectively chooses to withhold attestations
+manual analysis, we find that by controlling at least 13.4%                           only when the first slot of an epoch is controlled by the
+validators, the attack is already profitable, i.e., Byzantine                         adversary. For instance, when the adversary does not control
+validators gain more rewards than their fair share, but honest                        the first slot of two successive epochs, the agent will follow the
+validators receive lower rewards. We now explain why 13.4%                            protocol and will not withhold any attestations or delay blocks.
+is the threshold. Let β denote the ratio of the stake controlled                      The agent uses the proposer duty vector and justification
+by the adversary. As the validators are randomly assigned to 32                       state to determine its strategy. Also, the agent learns to
+slots in an epoch, the total weight (informally, the maximum                          conditionally withhold some of the attestations to gain more
+number of attestations) in a slot is 32     n
+                                               and the ratio of the                   profit. Specifically, if an attestation is not included in the block,
+                                   β
+adversarial stake in a slot is 32 . As illustrated in Figure 10,                      the attestor will receive only 5/7 of its fair share. The agent
+after the adversary launches the attack, the weight of the chain                      thus strictly controls the attestations that are withheld.
+led by block b3 should be heavier than the weight of the                                 With these improvements, the learned strategy might delay
+chain led by block b2 . In particular, the chain led by block                         the justification of blocks for multiple epochs and improve the
+b3 consists of the adversary’s attestations from slots 2 and 3,                       profit of the attack. The rewards by honest validators are up to
+          β
+i.e., 2 × 32 . In addition, block b3 receives a proposer boosting                     30% lower than those under the default strategy! Additionally,
+weight [47], i.e., 0.4 × 32 n
+                              . As a result, the weight of the chain                  the cost of the adversary to conduct the attack decreases by
+                 2β    0.4n                                                           13%, dropping from 46.1% under the default strategy to 40.1%
+led by b3 is 32 + 32 . Meanwhile, the weight of the chain
+                                                                                      with the optimized policy.
+led by block b2 consists of attestations from honest validators
+in slots 2 and 3, i.e., 2 × (n−β)                                                     Analysis. Our staircase attack-II shares the same feature
+                                32 . For the attack to succeed, we
+          2β      0.4n     2(n−β)
+require: 32 + 32 > 32 . By solving the inequality, we                                 as the staircase attack: Byzantine validators receive rewards
+have β > 15  2
+                ≈ 13.4%.                                                              while honest validators suffer from penalties, although honest
+                                                                                      validators strictly follow the specification of the protocol.
+The mitigation provided by Ethereum. We claimed in the                                Therefore, this attack falls into Metric III in our criteria. The
+introduction that our selfish mining attack has been mitigated                        probability of launching the attack is 1/9, as we require the
+in the recent update of the Prysm codebase, i.e., version v4.0.6                      proposer in the first slot to be Byzantine. Unlike the staircase
+updated in May 20244 . In version v4.0.6, Ethereum fixes the                          attack, staircase attack-II cannot be continuously launched.
+problem using a REORG PARENT WEIGHT THRESHOLD param-                                  However, if the adversary controls 33% stake and launches
+eter that denotes whether attestations are released.                                  the attack whenever the attack can be launched, all honest
+                                                                                      validators will incur penalties for the corresponding epochs.
+B. Staircase Attack-II
+                                                                                                           VII. R ELATED W ORK
+   As summarized in Table III, the average rewards received
+by honest validators are significantly reduced and the average                        Penetration testing. Penetration testing is commonly used at
+rewards received by the adversary are increased after the                             the later stage of a software development cycle [15]–[18].
+optimization. In extreme cases, all honest validators in several                      Informally, given an application (typically a web application),
+successive epochs are penalized and the adversary still receives                      penetration testing allows ethical targeted attacks to be injected
+its fair share.                                                                       into the application to confirm whether there exist any design
+                                                                                      or implementation flaws. The targeted attacks can be generated
+TABLE III: Optimization improvement for staircase attack-II.                          manually via human experts or by automated tools, e.g.,
+⋆
+  Default strategy refers to an attack instance that is identified                    machine learning or large language models [16]–[18]. Similar
+as a staircase attack-II by our state analyzer.                                       to penetration testing, our framework injects some targeted
+                                                                                      attacks into the system. Differently, penetration testing usually
+         Attack             Honest     Byzantine   Byzantine      Attack
+        Strategy           Validator   validator   Advantage   Success Rate           injects the attacks at the client side, treating the application
+    Default⋆                 -48.1       -34.7       13.4        35.0 %               in a black-box manner. In contrast, our framework injects the
+    RL-optimized method      -56.1       -28.9       27.2        97.0 %               attacks at Byzantine validators.
+Note: Byzantine Advantage is defined as the difference between the reward             Fuzz testing. Fuzz testing aims to find software implemen-
+of the Byzantine node and the honest node. BA Rate is 27.2/13.4 ≈ 2.02.               tation vulnerabilities [21]–[23], [48], [49] by injecting non-
+                                                                                      deterministic testing approaches. In blockchain consensus,
+  4 Prysm   v4.0.6: https://github.com/prysmaticlabs/prysm/releases/tag/v4.0.6        Tyr [21], LOKI [22], MPFUZZ [24] and CONFUZZIUS [50]
+
+
+
+                                                                                 13
+are four recent fuzzing techniques. The idea is to trig-                 withholding attack [12]. In this attack, validators privately cast
+ger abnormal behavior (e.g., sending meaningless messages),              but withhold votes to delay finality. Asgaonkar et al. proposed
+sometimes at all nodes, to identify the software bugs. For               the unrealized justification attack [11], where the adversary
+instance, LOKI [22] finds some common vulnerabilities and                withholds a justified checkpoint to gain more rewards.
+exposures (CVEs) for Ethereum and Hyperledger Fabric. MP-                   Recently, Nero showed that validators can manipulate the
+FUZZ [24] finds new asymmetric-DoS vulnerabilities on six                RANDAO (i.e., the randomness used to select proposers and
+major Ethereum clients. In contrast, our workflow is inspired            attestors) to gain extra benefits such as rewards [58]. Our
+by fuzz testing that injects failures to the codebase to find            current work does not incorporate the strategies of RANDAO
+uncovered issues. Compared to fuzz testing, our framework                manipulation, but it can be integrated into BunnyFinder to
+targets design flaws rather than implementation flaws. As a              possibly obtain new attacks. We leave it as future work.
+surprising finding, one of our attack instances also identifies             Many attacks focus on goals beyond incentives. Yaish et
+an implementation flaw.                                                  al. analyzed speculative denial-of-service (DoS) attacks [59].
+Byzantine simulator. Byzantine simulators are used for                   In this attack, adversaries can craft malicious transactions to
+assessing the robustness of Byzantine fault-tolerant (BFT)               clog blockchain actors’ mempools, forcing victims to produce
+protocols by simulating malicious or unpredictable behavior              empty blocks. Li et al. introduced DETER mempool DoS
+within the system. Twin [51] develops a unit testing tool that           attacks [60]. The vulnerabilities allow adversaries to use
+implements three Byzantine behaviors for assessing Byzantine             low-fee transactions to evict mempool transactions. Rodler
+fault-tolerant (BFT) protocols. The tool assesses a BFT-based            et al. presented EVMPatch [61], a framework designed to
+system Diem [52], and tries to verify whether the implementa-            automatically and instantly patch vulnerabilities in Ethereum
+tion is correct. It was shown that the tool can also be extended         smart contracts.
+to cover some known attacks on some BFT protocols. Similar
+                                                                                              VIII. C ONCLUSION
+to Twin, we also inject Byzantine behaviors. Unlike Twin,
+which mainly focuses on safety and liveness threats (which                  We present BunnyFinder, a framework designed to identify
+are not supposed to happen if the implementation matches the             incentive flaws in the Ethereum protocol. Inspired by software
+design of a provably secure protocol), our approach focuses              testing technologies, BunnyFinder provides a framework that
+on incentive flaws.                                                      automatically injects generated failures into a simulated net-
+Chaos engineering. Chaos engineering [53] is an approach                 work, analyzes the incentives received by the validators, and
+that assesses whether a system can still operate normally under          determines the presence of attacks. We have simulated 9,354
+errors [19], [20], [54]. The errors are often invalid system             attacks generated by our framework. Our results show that
+calls. By comparing the behavior of the system under and                 32.9% of the attacks belong to incentive flaws. By further
+without the injected system calls, the stability (sometimes              categorizing the flaws, our framework covers five known
+called resilience in the literature of chaos engineering) is             incentive attacks and uncovers three new attacks. As a by-
+evaluated. For example, CHAOSETH [19] conducts a chaos                   product, it also reveals two implementation flaws.
+engineering approach to an Ethereum implementation and
+                                                                                              ACKNOWLEDGMENT
+identifies potential issues that may make the validators crash
+under errors. In contrast, our approach does not aim to assess              We would like to thank Yu Jiang and Chao Zhang for
+whether the system can still operate correctly under errors but          their helpful discussion on software testing tools. This work
+rather to find incentive flaws.                                          was supported in part by the National Key R&D Program of
+RL-based tools. Several studies have employed reinforcement              China under 2023YFB2704300, the National Natural Science
+learning to solve vulnerabilities in blockchain systems [55]–            Foundation of China under 62502266, China Postdoctoral
+[57]. The closest work of our strategy optimizer is one due              Science Foundation under 2023M741949, a research grant
+to SquirRL [55]. SquirRL builds a reinforcement learning                 from the Ant Group, and Tsinghua Shuimu Scholar.
+based framework to analyze selfish mining in Bitcoin and a
+                                                                                          E THICAL C ONSIDERATIONS
+simplified version of Ethereum. The idea is to analyze whether
+a Nash equilibrium can be reached under different adversarial               Our experiments were conducted locally using open-source
+models. In contrast, we use RL to improve the attack strategies.         libraries and public datasets, without access to any external
+Known attacks to Ethereum. Many attacks have revealed                    or live systems. These experiments do not involve animals,
+incentive flaws in Ethereum PoS. Zhang et al. proposed the               humans, the environment, healthcare, or military applications.
+staircase attack [6]. In the attack, an adversary controlling            We carefully followed the ethical principles of the Menlo
+more than 29.6% of the stake can suppress attestation re-                Report throughout our experimental design.
+wards for all honest validators. D’Amato et al. introduced
+the sandwich reorg attack [10]. This attack allows collusion             A. Research Ethics Considerations
+between two Byzantine proposers to result in the orphaning                  We are committed to complying with all relevant research
+of blocks proposed by honest validators, thereby depriving               ethics considerations. In particular, we are committed to the
+them of their rightful rewards. Potuz described the justification        following principles:
+
+
+
+                                                                    14
+• Respect for Persons: Our research does not involve human                            [21] Y. Chen, F. Ma, Y. Zhou, Y. Jiang, T. Chen, and J. Sun, “Tyr: Finding
+  subjects or personal data. We respect the work of other                                  consensus failure bugs in blockchain system with behaviour divergent
+                                                                                           model,” in IEEE Symposium on Security and Privacy (SP). IEEE, 2023,
+  researchers and properly cite all relevant prior work.                                   pp. 2517–2532.
+• Beneficence: Our findings highlight a critical incentive                            [22] F. Ma, Y. Chen, M. Ren, Y. Zhou, Y. Jiang, T. Chen, H. Li, and
+  vulnerability in Ethereum.                                                               J. Sun, “LOKI: State-aware fuzzing framework for the implementation
+                                                                                           of blockchain consensus protocols,” in NDSS, 2023.
+• Justice: We strive to ensure our proposed modifications do                          [23] Y. Yang, T. Kim, and B.-G. Chun, “Finding consensus bugs in Ethereum
+  not disproportionately impact or disadvantage any particular                             via multi-transaction differential fuzzing,” in OSDI, 2021, pp. 349–365.
+  group. We have already disclosed our findings to Ethereum                           [24] Y. Wang, Y. Tang, K. Li, W. Ding, and Z. Yang, “Understanding
+                                                                                           ethereum mempool security under asymmetric DoS by symbolized
+  developers.                                                                              stateful fuzzing,” in USENIX Security, 2024, pp. 4747–4764.
+• Respect for Law and Public Interest: No actions have                                [25] Gartner, “Breach and attack simulation (bas) tools,” https://www.gartner.
+  been taken to exploit the identified vulnerabilities; instead,                           com/reviews/market/breach-and-attack-simulation-bas-tools, (accessed
+                                                                                           in Nov 2024).
+  our research was conducted with the goal of improving the
+                                                                                      [26] R. S. Sutton and A. G. Barto, “Reinforcement learning: An introduction,”
+  Ethereum system.                                                                         IEEE Trans. Neural Networks, vol. 9, pp. 1054–1054, 1998. [Online].
+                                                                                           Available: https://api.semanticscholar.org/CorpusID:60035920
+                              R EFERENCES                                             [27] Offchain Labs, “Prysm consensus client v5.3.3,” https://github.com/
+                                                                                           OffchainLabs/prysm/tree/v5.3.3, 2025.
+ [1] G. Wood et al., “Ethereum: A secure decentralised generalised transac-           [28] ConsenSys, “Teku client v25.6.0,” https://github.com/Consensys/teku/
+     tion ledger,” Ethereum project yellow paper, 2014.                                    tree/25.6.0, 2025.
+ [2] V. Buterin, D. Hernandez, T. Kamphefner, K. Pham, Z. Qiao, D. Ryan,              [29] M. Zhang, R. Li, X. Lu, and S. Duan, “Available attestation: Towards
+     J. Sin, Y. Wang, and Y. X. Zhang, “Combining ghost and casper,” arXiv                 a reorg-resilient solution for ethereum proof-of-stake,” in USENIX
+     preprint arXiv:2003.03052, 2020.                                                      Security, 2025.
+ [3] CoinMarketCap. (2025) Ethereum (eth) price, charts, and news.                    [30] I. Eyal and E. G. Sirer, “Majority is not enough: Bitcoin mining is
+     [Online]. Available: https://coinmarketcap.com/currencies/ethereum/                   vulnerable,” Communications of the ACM, vol. 61, no. 7, pp. 95–102,
+ [4] M. Neuder, D. J. Moroz, R. Rao, and D. C. Parkes, “Low-cost                           2018.
+     attacks on ethereum 2.0 by sub-1/3 stakeholders,” arXiv preprint                 [31] J. Brown-Cohen, A. Narayanan, A. Psomas, and S. M. Weinberg, “For-
+     arXiv:2102.02247, 2021.                                                               mal barriers to longest-chain proof-of-stake protocols,” in Proceedings
+ [5] C. Schwarz-Schilling, J. Neu, B. Monnot, A. Asgaonkar, E. N. Tas, and                 of the 2019 ACM Conference on Economics and Computation, 2019,
+     D. Tse, “Three attacks on proof-of-stake ethereum,” in FC, 2022, pp.                  pp. 459–473.
+     560–576.                                                                         [32] M. V. Ferreira and S. M. Weinberg, “Proof-of-stake mining games with
+ [6] M. Zhang, R. Li, and S. Duan, “Max attestation matters: Making honest                 perfect randomness,” in EC, 2021, pp. 433–453.
+     parties lose their incentives in ethereum pos,” in USENIX Security, 2024.        [33] M. Neuder, D. J. Moroz, R. Rao, and D. C. Parkes, “Selfish behavior
+ [7] R. Nakamura, “Analysis of bouncing attack on ffg,” https://ethresear.ch/              in the tezos proof-of-stake protocol,” arXiv preprint arXiv:1912.02954,
+     t/analysis-of-bouncing-attack-on-ffg/6113, (accessed in Feb 2024).                    2020.
+ [8] S. Bano, A. Sonnino, M. Al-Bassam, S. Azouvi, P. McCorry, S. Meik-               [34] E. Budish, A. Lewis-Pye, and T. Roughgarden, “The economic limits of
+     lejohn, and G. Danezis, “Sok: Consensus in the age of blockchains,”                   permissionless consensus,” in Proceedings of the 25th ACM Conference
+     in Proceedings of the 1st ACM Conference on Advances in Financial                     on Economics and Computation, 2024, pp. 704–731.
+     Technologies, 2019, pp. 183–198.                                                 [35] V. Buterin and V. Griffith, “Casper the friendly finality gadget,” arXiv
+ [9] V. Buterin, “Discouragement attacks,” 2018.                                           preprint arXiv:1710.09437, 2017.
+[10] F. D’Amato and C. Schwarz-Schilling, “Proposer boost considerations,”            [36] Y. Sompolinsky and A. Zohar, “Secure high-rate transaction processing
+     https://notes.ethereum.org/@casparschwa/H1T0k7b85, (accessed in Feb                   in bitcoin,” in FC. Springer, 2015, pp. 507–527.
+     2024).                                                                           [37] Y. Liu, Y. Lu, K. Nayak, F. Zhang, L. Zhang, and Y. Zhao, “Empirical
+[11] A. Asgaonkar, “Unrealized justification reorgs,” https://notes.ethereum.              analysis of eip-1559: Transaction fees, waiting times, and consensus
+     org/@adiasg/unrealized-justification, (accessed in Feb 2024).                         security,” in CCS, 2022, pp. 2099–2113.
+[12] Potuz, “Justification widtholding attacks,” https://hackmd.io/                   [38] R. Pass and E. Shi, “Fruitchains: A fair blockchain,” in PODC, 2017,
+     o9tGPQL2Q4iH3Mg7Mma9wQ, (accessed in Feb 2024).                                       pp. 315–324.
+[13] P. Chaidos, A. Kiayias, and E. Markakis, “Blockchain participation               [39] Y. Huang, J. Tang, Q. Cong, A. Lim, and J. Xu, “Do the rich get richer?
+     games,” in International Conference on Web and Internet Economics.                    fairness analysis for blockchain incentives,” in SIGMOD, 2021, pp. 790–
+     Springer, 2023, pp. 169–187.                                                          803.
+[14] S. Motepalli and H.-A. Jacobsen, “Reward mechanism for blockchains               [40] J. Neu, E. N. Tas, and D. Tse, “Ebb-and-flow protocols: A resolution
+     using evolutionary game theory,” in 2021 3rd Conference on Blockchain                 of the availability-finality dilemma,” in SP, 2021, pp. 446–465.
+     Research & Applications for Innovative Networks and Services                     [41] “Prevention of bouncing attack on ffg,” https://ethresear.ch/t/
+     (BRAINS). IEEE, 2021, pp. 217–224.                                                    prevention-of-bouncing-attack-on-ffg/6114, (accessed in Feb 2024).
+[15] B. Arkin, S. Stender, and G. McGraw, “Software penetration testing,”             [42] V. Konda and J. Tsitsiklis, “Actor-critic algorithms,” Advances in neural
+     IEEE Security & Privacy, vol. 3, no. 1, pp. 84–87, 2005.                              information processing systems, vol. 12, 1999.
+[16] G. Deng, Y. Liu, V. Mayoral-Vilches, P. Liu, Y. Li, Y. Xu, T. Zhang,             [43] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, “Prox-
+     Y. Liu, M. Pinzger, and S. Rass, “PentestGPT: Evaluating and harnessing               imal policy optimization algorithms,” arXiv preprint arXiv:1707.06347,
+     large language models for automated penetration testing,” in USENIX                   2017.
+     Security, 2024, pp. 847–864.                                                     [44] A. Graves and A. Graves, “Long short-term memory,” Supervised
+[17] T. Lee, S. Wi, S. Lee, and S. Son, “Fuse: Finding file upload bugs via                sequence labelling with recurrent neural networks, pp. 37–45, 2012.
+     penetration testing.” in NDSS, 2020.                                             [45] J. Garay, A. Kiayias, and N. Leonardos, “The bitcoin backbone protocol:
+[18] G. Deng, Z. Zhang, Y. Li, Y. Liu, T. Zhang, Y. Liu, G. Yu, and D. Wang,               Analysis and applications,” Journal of the ACM, vol. 71, no. 4, pp. 1–49,
+     “NAUTILUS: Automated RESTful API vulnerability detection,” in                         2024.
+     USENIX Security, 2023, pp. 5593–5609.                                            [46] M. Sproul, “Allow honest validators to reorg late blocks,” https://github.
+[19] L. Zhang, J. Ron, B. Baudry, and M. Monperrus, “Chaos engineering                     com/ethereum/consensus-specs/pull/3034, (accessed in Augest 2024).
+     of ethereum blockchain clients,” Distributed Ledger Technologies: Re-            [47] “Proposer lmd score boosting #2730,” https://github.com/ethereum/
+     search and Practice, 2023.                                                            consensus-specs/pull/2730, (accessed in Feb 2024).
+[20] S. Sondhi, S. Saad, K. Shi, M. Mamun, and I. Traore, “Chaos engi-                [48] A. Sorniotti, M. Weissbacher, and A. Kurmus, “Go or no go: Differential
+     neering for understanding consensus algorithms performance in permis-                 fuzzing of native and c libraries,” in 2023 IEEE Security and Privacy
+     sioned blockchains,” in DASC/PiCom/CBDCom/CyberSciTech, 2021.                         Workshops (SPW). IEEE, 2023, pp. 349–363.
+
+
+
+
+                                                                                 15
+[49] S. Sharma, S. R. Tanksalkar, S. Cherupattamoolayil, and A. Machiry,                 Vulnerability     Reported   Acknowledged Addressed   Channel.
+     “Fuzzing api error handling behaviors using coverage guided fault in-
+     jection,” in Proceedings of the 19th ACM Asia Conference on Computer                Selfish mining    Yes        Yes          Yes         CW [62]
+     and Communications Security, 2024, pp. 1495–1509.                                   Staircase
+[50] C. F. Torres, A. K. Iannillo, A. Gervais, and R. State, “Confuzzius: A                                Yes        Yes          No          CW [63]
+                                                                                         attack-II
+     data dependency-aware hybrid fuzzer for smart contracts,” in 2021 IEEE
+     European Symposium on Security and Privacy (EuroS&P). IEEE, 2021,                   Pyrrhic
+                                                                                                           Yes        Yes          No          MT
+     pp. 103–119.                                                                        Victory Attack
+[51] S. Bano, A. Sonnino, A. Chursin, D. Perelman, Z. Li, A. Ching, and
+     D. Malkhi, “Twins: Bft systems made robust,” in PODC, 2022.                         Synchronization
+                                                                                                           Yes        Yes          No          CW [64]
+[52] Diem, “Diembft,” https://github.com/diem/diem, (accessed in Nov                     issues
+     2024).                                                                                                                                    MT,
+[53] A. Basiri, N. Behnam, R. De Rooij, L. Hochstein, L. Kosewski,                       Incorrect log     Yes        Yes          Yes
+                                                                                                                                               EM
+     J. Reynolds, and C. Rosenthal, “Chaos engineering,” IEEE Software,
+     vol. 33, no. 3, pp. 35–41, 2016.
+[54] T. T. A. Dinh, J. Wang, G. Chen, R. Liu, B. C. Ooi, and K.-L.                   TABLE IV: Status of Discovered Vulnerabilities. “Reported”
+     Tan, “Blockbench: A framework for analyzing private blockchains,” in            indicates submission to Ethereum; “Addressed” indicates a fix
+     SIGMOD, 2017.                                                                   or mitigation; “Channel” indicates the form of disclosure, with
+[55] C. Hou, M. Zhou, Y. Ji, P. Daian, F. Tramèr, G. Fanti, and A. Juels,
+     “Squirrl: Automating attack analysis on blockchain incentive mecha-             CW indicating through community websites, MT indicating
+     nisms with deep reinforcement learning.”                                        through meeting reports, and EM indicating email.
+[56] R. De Silva, W. Guo, N. Ruaro, I. Grishchenko, C. Kruegel, and
+     G. Vigna, “{GuideEnricher}: Protecting the anonymity of ethereum
+     mixing service users with deep reinforcement learning,” in 33rd USENIX          to simulate targeted behaviors in attacks like staircase attack-
+     Security Symposium (USENIX Security 24), 2024, pp. 3549–3566.
+[57] W. Li, L. Xue, Z. Han, B. Chen, X. Zhang, and X. Zhou, “Autominer:              II and two variants of the pyrrhic victory attack. These
+     Reinforcement learning-based mining attack simulator,” in International         configurations enable precise manipulation of validator actions
+     Conference on Algorithms and Architectures for Parallel Processing.             to analyze the impact on Ethereum PoS.
+     Springer, 2024, pp. 222–241.
+[58] Nero eth, “Selfish mixing and randao manipulation,” Ethereum
+     Research post, Jul. 2023, accessed July 2025. [Online]. Available:              {
+     https://ethresear.ch/t/selfish-mixing-and-randao-manipulation/16081                  "slots": [{
+[59] A. Yaish, K. Qin, L. Zhou, A. Zohar, and A. Gervais, “Speculative                      "slot": "all",
+     {Denial-of-Service} attacks in ethereum,” in 33rd USENIX security                      "actions": {
+     symposium (USENIX Security 24), 2024, pp. 3531–3548.                                     "AttestBeforeBroadcast":"exit",
+[60] K. Li, Y. Wang, and Y. Tang, “Deter: Denial of ethereum txpool                         },
+     services,” in Proceedings of the 2021 ACM SIGSAC Conference on                         "slot": "0",
+     Computer and Communications Security, 2021, pp. 1645–1667.                             "actions": {
+[61] M. Rodler, W. Li, G. O. Karame, and L. Davi, “{EVMPatch}: Timely                         "BlockBeforeBroadcast":"delayWithDuration:1",
+     and automated patching of ethereum smart contracts,” in 30th usenix                    },
+     security symposium (USENIX Security 21), 2021, pp. 1289–1306.                          "slot": "31",
+[62] Ethresearch, “Selfish mining in pos,” https://ethresear.ch/t/                          "actions": {
+     selfish-mining-in-pos/15551, 2024, eTH Research.                                         "BlockGetNewAttestations":"true",
+[63] mart1i1n, “Staircase attack-ii in ethereum pos,” https://ethresear.ch/t/                 "BlockBeforeBroadcast":"delayWithDuration:192",
+     staircase-attack-ii-in-ethereum-pos/22099/10, Apr. 2025, ethereum Re-                  },
+     search Forum.                                                                          "slot": "32",
+[64] Mart1i1n, “Deadlock in synchronization module under staircase attack-                  "actions": {
+     ii,” https://github.com/OffchainLabs/prysm/issues/15144, 2025, gitHub                    "BlockBeforeBroadcast":"delayWithDuration:1",
+     Issue.                                                                                 },
+[65] D. E. Rumelhart, G. E. Hinton, and R. J. Williams, “Learning repre-                  }]
+     sentations by back-propagating errors,” nature, vol. 323, no. 6088, pp.         }
+     533–536, 1986.
+[66] J. Schulman, P. Moritz, S. Levine, M. Jordan, and P. Abbeel, “High-             Figure 17: The JSON file in SSF for the staircase attack-II.
+     dimensional continuous control using generalized advantage estimation,”
+     arXiv preprint arXiv:1506.02438, 2015.                                          {
+[67] D. P. Kingma and J. Ba, “Adam: A method for stochastic optimization,”                "slots": [{
+     arXiv preprint arXiv:1412.6980, 2014.                                                  "slot": "1-31",
+                                                                                            "actions": {
+                         A PPENDIX A                                                          "AttestBeforeBroadcast":"exit",
+                                                                                            },
+             C URRENT S TATUS OF V ULNERABILITY                                             "slot": "31",
+  We summarize the current status of vulnerability found in                                 "actions": {
+                                                                                              "BlockBeforeBroadcast":"delayWithDuration:4",
+Table IV. All of our findings are acknowledged by Ethereum.                                 },
+                                                                                            "slot": "32",
+                             A PPENDIX B                                                    "actions": {
+                            SSF JSON F ILE                                                    "BlockGetNewParentRoot":"modifyParentRoot:31",
+                                                                                              "BlockBeforeBroadcast":"delayWithDuration:1",
+   Figures 17, 19, and 18 display JSON files in the                                         },
+Strategy Specification Format (SSF) for configuring at-                                   }]
+                                                                                     }
+tack scenarios within our BunnyFinder framework. Each
+JSON file defines specific actions at various slots, such as                         Figure 18: The JSON file in SSF for the second variant of
+exit, delayWithDuration, and modifyParentRoot,                                       pyrrhic victory attack.
+
+
+
+                                                                                16
+{                                                                        approximately 19 minutes, making it impractical to       explore
+    "slots": [{
+      "slot": "all",                                                     all combinations. To improve efficiency, we reduced      the slot
+      "actions": {                                                       time from 12 seconds to 3 seconds, cutting the           average
+        "AttestBeforeBroadcast":"exit",                                  time per experiment from 19 minutes to 4.8 minutes       without
+      }
+    }]                                                                   compromising result correctness.
+}
+                                                                                               A PPENDIX D
+Figure 19: The JSON file in SSF for the first variant of pyrrhic                    R EINFORCEMENT L EARNING D ETAILS
+victory attack. The action exit means that the function of
+                                                                            In this section, we provide detailed implementations of our
+broadcasting an attestation is directly terminated.
+                                                                         reinforcement learning approach.
+                                A PPENDIX C
+                                                                         A. Environment
+                            E VALUATION D ETAILS
+                                                                           We summarize the environmental changes as follows:
+Experimental setup. There are three types of nodes: beacon               • (Selfish mining) In this attack, the goal of the adversary
+nodes, execution nodes, and validator nodes. The beacon nodes              is to manipulate the fork choice rule. Finality mechanisms,
+establish a peer-to-peer network (called the consensus layer)              i.e., Casper FFG, are not directly involved, as the attack
+via the “libp2p” protocol5 . Execution nodes establish a peer-             does not aim to reverse finalized blocks. Thus, we remove
+to-peer network (called the execution layer) via the “devp2p”              the Casper FFG in the environment. We adopt a simplified
+protocol6 . The beacon nodes communicate with the validator                finality heuristic where a block is considered finalized if
+nodes and the execution nodes via the “gRPC” protocol.                     it remains on the canonical chain for eight slots. We use
+   We show an example of the network topology in Figure 20.                eight slots because we observe that most reorganizations in
+This topology has two layers and includes beacon nodes,                    selfish mining attacks cannot last for longer than eight slots.
+execution nodes, and validator nodes. In our testnet, we                   Rewards are computed based on this finality approximation.
+require some beacon nodes (highlighted in red in the figure)             • (Staircase attack-II) The attack aims to delay the justifica-
+to be modified to act as Byzantine nodes. This modification                tion of blocks and manipulate the canonical chain by honest
+introduces adversarial behavior while maintaining connections              validators. The attack strategies do not involve modifying
+with other nodes in the network.                                           the weight of the fork choice. We simplify the LMD-
+                                                                           GHOST logic by only keeping the pruning mechanism.
+                                                                           Furthermore, as the action does not involve a temporary
+                                                                           blockchain fork, we modify each action taken by the agent
+                                                                           as an epoch.
+                                                                         B. State and Action Space
+                                                                            A key component of the state space is the agent’s proposer
+                                                                         duty vector, which encodes whether the Byzantine validator
+                                                                         is scheduled to propose blocks in a fixed future time window.
+                                                                         Formally, this is represented as a binary vector of length t,
+                                                                         i.e., duty ∈ 0, 1t , where each entry indicates whether the
+                                                                         agent is the designated proposer in the corresponding slot.
+                                                                         According to the current Ethereum system, the information
+                                                                         is known in advance. Proposer’s duty influences the agent’s
+                                                                         planning horizon: since the effectiveness of certain attacks
+     Figure 20: Overview of BunnyFinder network topology.
+                                                                         depends on when the adversary controls the proposer, having
+                                                                         visibility into upcoming proposer slots makes it easy to adjust
+Experimental optimization. As discussed in Sec. III, each
+                                                                         the attack strategies.
+slot allows modification of five data structures: parent,
+attestations, head, source, and target, and sup-                         • (Selfish mining) We define the state observed from the
+ports two message types to delay: block and attestation. Any                environment as sselfish
+                                                                                               t     = [duty, wpub , wpriv ]. Proposer duty
+combination of at least 7 strategies can                                    vector duty ∈ {0, 1}8 indicates whether the adversary is
+                                       Pnbe selected per slot,              the block proposer in the next eight slots. Since the attack
+with the total combinations given by k=0 Cnk = 2n . Thus,
+each slot has 27 = 128 possible strategies. One attacking                   is closed related to the slots with Byzantine proposers, this
+instance requires 3 epochs (96 slots) to launch and we can                  state determines whether the agent should propose a block
+generate up to 12896 theoretical strategy combinations. Un-                 or withhold the block. It also defines the “attack window”,
+der the current configuration, completing one instance takes                successful selfish mining hinges on well-timed block pro-
+                                                                            duction by the adversary. Let wpub ∈ N represents the weight
+    5 libp2p:   https://blog.ipfs.tech/2020-06-09-libp2p-in-2020/           of the public chain. This weight reflects the accumulative
+    6 devp2p:    https://geth.ethereum.org/docs/tools/devp2p                attestations of all validators (including honest ones) and is
+
+
+
+                                                                    17
+   the input to fork choice. For the attack to succeed, the private              • (Staircase attack-II) For staircase attack-II, we aim to
+   chain must eventually exceed this weight. Let wpriv ∈ N                         discard honest attestations through chain reorganizations.
+   be the weight of the private chain. This value tracks the                       The reward function is defined as Rstaircase (t) = δ ·
+   adversary’s progress in building the private chain. It informs                  Ndiscarded (t) + ϵ · (Radv (t) − Rhonest (t)), where Ndiscarded
+   the agent when the attack becomes profitable.                                   is the number of honest attestations discarded from the
+• (Staircase attack-II) Let sstaircase
+                                 t      = [duty, jpub , jpriv , jglobal ]          canonical chain, Radv and Rhonest are rewards received
+   be the state. As in selfish mining, the proposer duty vector                    by adversarial and honest validators, and δ, ϵ are weighting
+   duty ∈ {0, 1}64 indicates whether the adversary controls                        coefficients.
+   the proposer in the current epoch and the next epoch. Let                        Given the multi-epoch nature of attacks, we use delayed
+   jpub be the last justified checkpoint on the public chain. The                rewards Rtotal (t) = Στi=0 γ i · R(t + i), where τ is the delay
+   adversary must monitor jpub to adjust its strategy. Let jpriv                 time, γ is the discount factor, and R is the current rewards at
+   be the last justified checkpoint of the private chain. This                   slot t. All rewards are normalized relative to honest protocol
+   discrepancy of jpub and jpriv forms the basis of the staircase                baselines to ensure consistent learning across different stake
+   attack, as mentioned in Sec. V.                                               distributions.
+   The agent’s behavior consists of two decisions: a block
+proposal strategy and an attesting strategy. Based on the                        D. Architecture of the Model
+targets of the two attacks, we use the following actions in
+the reinforcement learning:                                                         We adopt a recurrent actor-critic architecture to serve as
+• (Selfish mining) There are three actions for each Byzantine                    the agent’s predictive model, enabling memory-dependent
+   proposer: propose a block according to the protocol, with-                    decision-making under partial observability and delayed feed-
+   hold the block, and release previously withheld block(s).                     back. The model is structured around three core components: a
+   The first action is the behavior of an honest validator, so                   feedforward feature encoder, a recurrent memory module, and
+   taking this action does not yield a higher reward than the fair               two output heads for action selection and value estimation.
+   share. The second and third actions are related to the profit                    In each step, the agent receives a structured state vector that
+   of the attack. Additionally, there are two attesting actions:                 includes current chain features and the proposer duty vector.
+   send the attestation according to the protocol; withhold                      This input is first passed through a feedforward encoder,
+   the attestation and release it later. Similar to the proposal                 i.e., a multi-layer perceptron (MLP) [65] with one hidden
+   actions, the second action is related to the profit of the                    layer of 512 units and ReLU activation, which transforms the
+   attack.                                                                       raw state into a fixed-dimensional embedding. This encoded
+• (Staircase attack-II) The actions in the staircase attack                      representation is then processed by a two-layer Long Short-
+   reinforcement learning model are Astaircase = [p1 , p2 , p3 , a1 ],           Term Memory (LSTM) network, each layer containing 256
+   where p1 ∈ {0, 1}, p2 ∈ {0, 1}, and p3 ∈ {0, 1} are proposal                  hidden units. The LSTM maintains temporal context over time,
+   actions and a1 ∈ {0, 1} is attesting action. The p1 action                    allowing the agent to track multi-step attack dynamics, such
+   determines whether the block is delayed. If so, the block is                  as private chain length, justification progression, or delayed
+   delayed by four seconds. This disrupts the start of the voting                proposal release schedules. The recurrent design is essential
+   period and reduces the chances of successful justification.                   for capturing patterns in environments with partial observabil-
+   The action p2 controls whether the last Byzantine proposer                    ity and delayed reward signals, where the consequences of an
+   delays its block. If so, the agent will include all attestations              action may unfold over several future steps.
+   from Byzantine validators in its block and withhold it.                          The output of the LSTM is shared between two separate
+   The private chain will justify a higher checkpoint. The                       linear heads. The actor head outputs unnormalized logits over
+   action p3 determines whether to release the withheld blocks.                  the discrete action space, which are converted into action
+   The action a1 controls whether the adversary withholds                        probabilities via a softmax function. These probabilities define
+   their attestations. Withholding the attestations might disrupt                the agent’s stochastic policy, from which actions are sampled
+   justification of the public chain.                                            during training and inference. The critic head produces a scalar
+                                                                                 value estimate of the expected return from the current state,
+C. Reward Function                                                               which is used to compute advantage estimates during training.
+   We design tailored reward functions for different attack                      Both outputs are optimized jointly.
+types to guide the RL agent toward behaviors that maximize                          The model is trained end-to-end using Proximal Policy
+attack effectiveness.                                                            Optimization (PPO), with Generalized Advantage Estimation
+• (Selfish mining) For selfish mining attacks, we focus on                       (GAE) [66] to smooth temporal credit assignment. The PPO
+   causing block reorganizations. The reward function is de-                     loss consists of a clipped policy gradient term for stable
+   fined as Rself ish (t) = α · Nreorg (t) + β · (Wadv (t) −                     updates, a value regression term to train the critic, and an
+   Whonest (t)), where Nreorg (t) is the number of honest                        entropy bonus to encourage exploration. We use the Adam
+   blocks reorganized at slot t, Wadv and Whonest are the                        optimizer [67] with a learning rate of 3 × 10−4 , gradient
+   cumulative weights of adversarial and honest blocks respec-                   clipping (max norm 0.5), and run updates over minibatches
+   tively, and α, β are weighting coefficients.                                  sampled from trajectories collected in parallel environments.
+
+
+
+                                                                            18
+                               A PPENDIX E                                 After running for six minutes, the experiment stops, and the
+                           A RTIFACT A PPENDIX                           output is as follows:
+                                                                         [+] Running 17/17
+A. Description & Requirements                                             - Container none-attacker1-1   Removed           0.7s
+   We present BunnyFinder, a framework for finding incentive              - Container none-validator4-1 Removed  12.0s
+                                                                          ...
+flaws in Ethereum. Our artifact consists of the BunnyFinder               - Container none-execute1-1    Removed 10.9s
+implementation.                                                           - Network none_meta            Removed  0.8s
+   1) How to access: The artifact can be accessed by down-               result collect
+                                                                         [+] Running 2/2
+loading from Zenodo. All the scripts, container images, source            - Container case-ethmysql-1 Removed     2.2s
+codes, and sample output files can be accessed via the URL:               - Network case_default       Removed    0.9s
+https://doi.org/10.5281/zenodo.17042549.
+                                                                 D. Major Claims
+   2) Hardware dependencies: The experiments do not require
+any specialized hardware. Our test environment is a computer (C1): BunnyFinder can reproduce known incentive attacks. This
+with an 8-core CPU, 16 GB of RAM, 100 GB of storage, and             is proven by experiment (E1), as described in Section V
+a 100 Mbps network connection.                                       in the paper.
+   3) Software dependencies: Our experiments require a host    (C2): BunnyFinder can discover three previously unknown in-
+running Ubuntu 22.04 or higher, with Docker installed ac-            centive flaws. This is proven by experiment (E2), which
+cording to the official documentation (Engine version 24.0.6         reproduces the results in Section V in the paper.
+or higher), plus the docker-compose plugin and the Kurtosis (C3): BunnyFinder generates and evaluates attack instances
+framework.                                                           with high coverage. This is proven by experiment (E3),
+   4) Benchmarks: None                                               which reproduces the results in Section V in the paper.
+                                                               (C4): BunnyFinder can improve the attack effects using rein-
+B. Artifact Installation & Configuration                             forcement learning. This is proven by experiment (E4),
+   After installing Docker, run the following steps:                 which reproduces Table III in Section VI in the paper.
+1. Download the repository zip file and unzip7 :                 E. Evaluation
+  curl -o bunnyfinder.zip https://zenodo.org/
+                                                                            1) Experiment (E1): [30 human-minutes + 3 compute-
+  records/17042549/files/bf_workspace.zip?download=1
+                                                                         hours]: Reproduce five known incentive attacks, such as ex-
+  && unzip bunnyfinder.zip
+                                                                         ante reorg attack, sandwich reorg attack, and staircase attack.
+2. Enter the repository directory (denote as $HOME):
+                                                                            [Preparation] If the test experiment is successful, no addi-
+  cd bf workspace
+                                                                         tional preparation is required.
+3. Build the required Docker image in the repository root
+                                                                            [Execution] The experiments need to start each attack
+  directory:
+                                                                         manually. Each attack reproduction will run for one hour. The
+  ./build.sh
+                                                                         output should be similar to that in the basic test. Run each
+C. Experiment Workflow                                                   attack experiment under $HOME.
+  After building the Docker image, run the basic test with the              Run the exante reorg attack in Prysm 5.2.0 for one hour by:
+                                                                           ./attack.sh exante
+command:
+./attack.sh none
+                                                                           Run the sandwich reorg attack in Prysm 5.2.0 for one hour
+Our system does not support running multiple instances (using            by:
+                                                                           ./attack.sh sandwich
+attack.sh) in parallel, as they share the same working directory.
+                                                                           Run the staircase attack in Prysm 4.0.5 for one hour by:
+The following outputs are expected:
+                                                                           ./attack.sh staircase
+casetype is none
+[+] Running 2/2                                                             [Results] After completion, the output will be displayed as
+ - Network case_default       Created     0.2s                           follows:
+ - Container case-ethmysql-1 Started      0.6s                           [+] Running 17/17
+run strategy none                                                         - Container exante-validator5-1 Removed 12.7s
+INFO[0000] Specified a chain config file: /root/confi                     - Container exante-validator3-1 Removed 12.5s
+g/config.yml prefix=genesis                                               ...
+INFO[0000] No genesis time specified, defaulting to n                     - Container exante-execute5-1     Removed 10.8s
+ow() prefix=genesis                                                       - Network exante_meta             Removed 0.8s
+INFO[0000] Delaying genesis 1752219566 by 15 seconds                     result collect
+...                                                                      exante attack occurs reorganize blocks in slot 8-9.
+INFO[0000] Command completed                                             exante attack occurs reorganize blocks in slot 23-24.
+prefix=genesis                                                           ...
+[+] Running 17/17                                                        test finished and all nodes data in \$HOME/results/e
+ - Network none_meta            Created   0.2s                           xante
+ - Container none-execute3-1    Started   1.3s                           [+] Running 2/2
+ ...                                                                      - Container case-ethmysql-1 Removed             2.0s
+ - Container none-validator2-1 Started    3.5s                            - Network case_default        Removed
+wait 360 seconds
+                                                                           The reorganization of blocks from honest validators indi-
+  7 Please   ensure install unzip in your environment.                   cates that the attack has been successfully reproduced.
+
+
+
+                                                                    19
+  2) Experiment (E2): [30 human-minutes + 3 compute-                       [Results] After completion, the output will be displayed in
+hours]: Identify three new incentive attacks, including selfish          Figure 21.
+mining attack, staircase attack-II, and pyrrhic victory attack.            [Note] One can view all our attack instances by querying
+  [Preparation] If the test experiment and experiment E1 are             uuid. Each attack instance is uniquely identified by its uuid
+successful, no additional preparation is required.                       and contains metadata including attack strategies, timestamps,
+  [Execution] The experiments need to start each attack                  the loss rate of honest validators and Byzantine validators.
+manually. Each attack reproduction will run for one hour. The
+output should be similar to that in the basic test and experiment        mysql> SELECT COUNT(1) FROM t_strategy where
+                                                                         ,→  is_end=1;
+E1. Run each attack experiment in the $HOME directory.                   +----------+
+  Run the selfish mining attack in Prysm 5.2.0 for one hour              | COUNT(1) |
+by:                                                                      +----------+
+                                                                         |      7991 |
+  ./attack.sh selfish                                                    +----------+
+  Run the staircase attack-II in Prysm 5.2.0 for one hour by:            1 row in set (0.24 sec)
+  ./attack.sh staircase-ii                                               mysql> SELECT
+                                                                         ,→  uuid,category,honest_lose_rate_avg,attacker_lose_rate_avg
+  Run the pyrrhic victory attack in Prysm 5.2.0 for one hour             ,→  FROM t_strategy ORDER BY honest_lose_rate_avg
+by:                                                                      ,→  DESC LIMIT 10;
+                                                                         +------+------+-------+-----------+
+  ./attack.sh pyrrhic-victory
+                                                                         | uuid                                 | category
+   [Results] After completion, the output will be displayed as           ,→  | honest_lose_rate_avg | attacker_lose_rate_avg
+follows:                                                                 ,→  |
+                                                                         +------+------+-------+-----------+
+[+] Running 17/17
+                                                                         | be0392e4-2af5-4328-ae73-75cb940183fb |
+ - Container staircaseii-validator5-1 Removed 12.7s
+                                                                         ,→  ext_unrealized |                     2 |
+ - Container staircaseii-validator3-1 Removed 12.5s
+                                                                         ,→  2 |
+ ...
+                                                                         | 8165a654 | ext_withholding |   1.4351343907591927
+ - Container staircaseii-execute5-1    Removed 10.8s
+                                                                         ,→  |      0.4257843676895559 |
+ - Network staircaseii_meta            Removed 0.8s
+                                                                         | 0908f1a1 | ext_withholding |   1.0404429370482193
+result collect
+                                                                         ,→  |     0.36005933160736164 |
+staircaseii attack occurs reorganize blocks in slot
+                                                                         | 36917a9b | ext_unrealized |    0.8446009559734197
+152-216.
+                                                                         ,→  |     0.23046993257190004 |
+staircaseii attack occurs reorganize blocks in slot
+                                                                         | 1d80817a | ext_exante       |  0.8082500263074806
+542-595.
+                                                                         ,→  |      0.3611931605441617 |
+test finished and all nodes data in /home/ec2-user/
+                                                                         | 04c85187 | ext_exante       |  0.8055164361051975
+bf_workspace/results/staircaseii
+                                                                         ,→  |     0.21875258015687382 |
+[+] Running 2/2
+                                                                         | 51939515 | ext_withholding |   0.7923948105456591
+ - Container case-ethmysql-1 Removed            2.0s
+                                                                         ,→  |     0.21484450254575513 |
+ - Network case_default       Removed
+                                                                         | a217afb6 | ext_exante       |  0.7872249249224978
+   The reorganization of blocks from honest validators indi-             ,→  |     0.28465754717886815 |
+                                                                         | 9592f814 | ext_staircase    |  0.7792295550392992
+cates that the attack has been successfully conducted.                   ,→  |     0.21093986514380028 |
+   3) Experiment (E3): [30 human-minutes]: Query and ana-                | 03332ad2 | ext_withholding |   0.7660159949489652
+lyze attack instances from our attack database. The database             ,→  |      0.2070317875326818 |
+                                                                         +------+------+-------+-----------+
+contains exactly 7,991 completed attack strategy records                 10 rows in set (0.19 sec)
+shown in the paper. One can execute SQL statements to view
+our attack database.                                                                Figure 21: The output of SQL results.
+   [Preparation] If the test experiment and experiments
+E1&E2 are successful, no additional preparation is required.                4) Experiment (E4): [30 human-minutes + 2 compute-
+   [Execution] Connect to the remote database and execute                hours]: Compare extended staircase attack with RL-optimized
+SQL statements for querying attack strategies. Run each query            staircase attack.
+under $HOME.                                                                [Preparation] If the test experiment and experiment E1 are
+   Connect to the remote database by:                                    successful, no additional preparation is required.
+  export MYSQL PASSWORD=j8P#zQ7@mV2kL9xxD                                   [Execution] The experiments need to be started manually
+  Use the script to connect to our remote database:                      by:
+  ./tool/connect ndss.sh                                                   ./attack.sh rl
+  Query the top 10 most effective attack strategies ordered by              [Results] After completion, the system outputs the hon-
+honest validator loss rate:                                              est validators’ loss rate, the Byzantine validators’ loss rate,
+  SELECT uuid,category,honest lose rate avg,                             Byzantine validators’ advantage, and the success rate, both
+attacker lose rate avg FROM t strategy ORDER BY                          before and after reinforcement learning optimization. Notably,
+honest lose rate avg DESC LIMIT 10;                                      due to the introduction of randomness, the exact values may
+  Query detailed strategy content by a specific uuid:                    differ slightly from those reported in Table III of Section VI.
+  SELECT content FROM t strategy WHERE uuid =                            However, the overall trend remains consistent: reinforcement
+’your uuid here’;                                                        learning increases the Byzantine advantage.
+
+
+
+                                                                    20
+

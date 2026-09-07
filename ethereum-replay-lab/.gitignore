@@ -1,0 +1,73 @@
+# =============================================================
+# Ethereum Replay Lab — local-only artefacts
+# =============================================================
+# Keep source, config, manifests, docs.
+# Drop everything that grows per-run or could leak secrets.
+
+# Secrets (validator keys, jwt secrets, boot keys, mnemonics)
+secrets/
+keys/
+*.secret
+*.hex
+boot.key
+jwtsecret
+password.txt
+accounts.json
+*.sk
+*.sk.json
+mnemonic*
+# Experiment node keys (secp256k1 privkeys for bootnode/attackers)
+artifacts/eclipse-nodekey.json
+artifacts/eclipse-attacker-keys/
+
+# Generated run artefacts (per run_id)
+runs/
+results/
+artifacts/runs/
+
+# Docker / build cache
+.docker-cache/
+build/
+.gradle/
+**/build/
+**/.gradle/
+
+# Go / Rust / Node outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Heavy/auxiliary data
+*.tar.gz
+*.tgz
+*.zip
+*.pcap
+*.pcapng
+*.log
+*.log.*
+logs/
+
+# Local editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local env overrides
+.env
+.env.*
+!.env.example

@@ -1,0 +1,756 @@
+                                                       Eclipse Attacks on Ethereum’s Peer-to-Peer Network
+                                                                           Ruisheng Shi1,★, Yuxuan Liang1 , Zijun Guo1 , Qin Wang2 ,
+                                                                                Lina Lan1,★, Chenfeng Wang1 , Zhuoyi Zheng1
+                                                                          1 Beijing   University of Posts and Telecommunications | 2 UNSW Sydney
+
+                                         Abstract                                                                   These shifts call for a renewed assessment of classical network-
+                                         Eclipse attacks isolate blockchain nodes by monopolizing their          layer threats within Ethereum’s PoS architecture. For instance, the
+                                         peer-to-peer connections. The attacks were extensively studied in       persistent online presence of validators results in stable peer sets,
+                                         Bitcoin (SP’15, SP’20, CCS’21, SP’23) and Monero (NDSS’25), but         making them ideal targets for long-term network manipulation.
+                                         their practicality against Ethereum nodes remains underexplored,        The reliance on static bootstrapping and DNS-based discovery sig-
+                                         particularly in the post-Merge settings.                                nificantly enhances the success rate of peer poisoning strategies.
+arXiv:2601.16560v1 [cs.CR] 23 Jan 2026
+
+
+
+
+                                            We present the first end-to-end implementation of an eclipse            In this paper, we revisit and refine the classic eclipse attack under
+                                         attack targeting Ethereum (2.0 version) execution-layer nodes. Our      these updated assumptions. We propose a practical, multi-stage
+                                         attack exploits the bootstrapping and peer management logic of          attack that leverages previously discussed vectors (e.g., discovery
+                                         Ethereum to fully isolate a node upon restart. We introduce a multi-    table poisoning, DNS list infiltration) to strategically occupy both
+                                         stage strategy that majorly includes (i) poisoning the node’s dis-      incoming and outgoing connections.
+                                         covery table via unsolicited messages, (ii) infiltrating Ethereum’s        We present our progress in a step-by-step manner.
+                                         DNS-based peerlist by identifying and manipulating the official         ⊲ We systematically analyze the P2P networking behavior
+                                         DNS crawler, and (iii) hijacking idle incoming connection slots            of post-Merge Ethereum execution-layer nodes.
+                                         across the network to block benign connections. Our DNS list poi-          We deeply analyze how post-Merge Ethereum nodes discover
+                                         soning is the first in the cryptocurrency context and requires only     peers, manage connections, and maintain the network. Our study
+                                         28 IP addresses over 100 days. Slots hijacking raises outgoing redi-    covers both client architecture and address formats, particularly the
+                                         rection success from 45% to 95%. We validate our approach through       transition from legacy enode to the more extensible ENR format.
+                                         controlled experiments on Ethereum’s Sepolia testnet and broad          We delve into the structure and management of both short-term
+                                         measurements on the mainnet. Our findings demonstrate that over         (discovery table) and long-term (DB) peer records, highlighting
+                                         80% of public nodes do not leave sufficient idle capacity for ef-       mechanisms such as Discv4 message handling, dynamic K-bucket
+                                         fective slots occupation, highlighting the feasibility and severity     updates, IP-based admission limits, and initialization routines that
+                                         of the threat. We further propose concrete countermeasures and          protect against adversarial influence.
+                                         responsibly disclosed all findings to Ethereum’s security team.            In addition, we explore the full connection management lifecy-
+                                                                                                                 cle, including the establishment and limitations of incoming and
+                                         Keywords                                                                outgoing connections, rate-limiting policies, and the fallback to
+                                         Eclipse Attacks, Ethereum, Web3, Peer-to-Peer Network                   DNS-based discovery. We further examine the role of the devp2p
+                                                                                                                 crawler in maintaining Ethereum’s DNS peerlist, detailing its scor-
+                                         1   Introduction                                                        ing system, update frequency, and pruning behavior. These insights
+                                                                                                                 reveal points of vulnerability within Ethereum’s peer discovery
+                                         Ethereum has become one of the most successful cryptocurrency
+                                                                                                                 and connection protocol stack, which inform our attack design and
+                                         platforms. On Sep. 15, 2022, Ethereum completed its long-anticipated
+                                                                                                                 defense proposals.
+                                         merge [1], transitioning from Proof-of-Work (PoW) to Proof-of-
+                                                                                                                 ⊲ We propose the first practical eclipse attack against the
+                                         Stake (PoS). This merge unified the original Ethereum mainnet
+                                                                                                                    Ethereum’s post-Merge P2P network.
+                                         (execution layer) and the Beacon Chain (consensus layer), reducing
+                                         energy consumption by 99.95% by eliminating the need for energy-           Eclipse attacks isolate a target node by controlling all its P2P con-
+                                         intensive mining. This transition introduced new assumptions and        nections [3–6]. Once isolated, an attacker can feed the victim false
+                                         behavioural changes in the peer-to-peer (P2P) network layer [2]:        information, undermining blockchain consistency and enabling
+                                                                                                                 various attacks—such as deanonymization [7–9], selfish mining [10–
+                                         • Long-lived validator nodes. PoS validators maintain persistent
+                                                                                                                 13], double spending, or smart contract manipulation [14]. These
+                                            online presence, resulting in more stable peer sets.
+                                                                                                                 attacks reduce network resilience and can support larger threats
+                                         • Static bootstrapping and peer discovery. Validators often
+                                                                                                                 like 51% attacks.
+                                            reuse static peer configurations or depend heavily on DNS-based
+                                                                                                                    Research on Ethereum’s network layer has explored its secu-
+                                            discovery mechanisms.
+                                                                                                                 rity [15], topology [16, 17], and P2P behavior [18], and attacks such
+                                         • Client usage patterns. A small number of client pairings (e.g.,
+                                                                                                                 as partitioning and eclipsing [6, 19–23], topology mapping [16, 17,
+                                            Prysm+Geth) dominate validator deployments.
+                                                                                                                 24–33], and network-layer deanonymization [18, 34–40]. However,
+                                         • Exposure of execution clients. Although block finality is de-
+                                                                                                                 most eclipse attack studies focus on Bitcoin [41–43] or Monero [44],
+                                            termined by the consensus layer, the execution client handles
+                                                                                                                 and existing Ethereum work largely predates the Merge [19–21].
+                                            transaction gossip and mempool operations.
+                                                                                                                 ⊲ We have new designs for implementing the attack.
+                                         Accepted by The ACM Web Conference (WWW) 2026.
+                                         ★ denotes corresponding authors.
+   Ethereum’s current network stack introduces new challenges                       2.2    Peerlist Management
+for eclipse attacks. Recent Geth versions preload benign peers into                 To support efficient node discovery and connection establishment,
+the discovery table, blocking early attacker entries. Since v1.9.11,                Ethereum employs a distributed and dynamically updated peerlist
+Ethereum also uses DNS-based peer discovery, which can bypass                       management mechanism.
+poisoned tables. Finally, each node only accepts 34 incoming con-
+nections, making slot preemption essential.                                         Short-&long-term databases. The local node maintains a long-
+   We design a multi-stage attack. We first fill the target’s peerlist              term node storage database (referred to as DB) with no size limita-
+(discovery table and DNS), then hijack incoming slots network-wide.                 tions. This database persists even after the local node is restarted,
+When the target restarts, it is forced to connect only to attacker-                 retaining all stored nodes. Concurrently, each time the local node
+controlled nodes so as to complete the eclipse.                                     starts up, it creates a short-term node database in the memory
+   Here, we highlight our new designs.                                              called the discovery table, used for node discovery and connection
+⊲ We evaluate attacks on both Sepolia testnet and mainnet.                          management within the Ethereum network. Unlike the long-term
+   We implement and evaluate our attack pipeline on Sepolia (test-                  database, this short-term one is cleared entirely upon each restart
+net), validating the feasibility and success rate of each attack stage              of the local node.
+under realistic network conditions. To assess applicability, we also                Discv4 messages. Ethereum’s node discovery is implemented via
+analyze Ethereum mainnet nodes and measure network-wide slot                        the Discv4 protocol [47], which operates over UDP. The protocol de-
+availability, connection patterns, and peer behavior.                               fines six types of message packets, including Ping/Pong for liveness
+   We conduct a step-by-step experimental analysis of each attack                   detection and node table updates, FindNode/Neighbors for locating
+component. For instance, in evaluating the incoming slot hijacking                  the closest nodes in the ID space, and ENRRequest/ENRResponse for
+strategy, we scan over 2000 public Ethereum nodes and observe that                  exchanging node records. Together, these messages enable nodes to
+more than 80% of them have at most 10 available incoming slots,                     test connectivity, discover new peers, and maintain an up-to-date
+confirming the feasibility of large-scale slots occupation. Our DNS                 view of the network topology.
+poisoning strategy is tested over a 3-month period, during which
+we successfully infiltrate the DNS list with attacker-controlled IPs.               Management mechanism of DB. The long-term database (i.e., DB)
+Experiments are carefully documented, and key metrics (e.g., filling                maintains metadata for each discovered node. Two main operations
+rates, IP resource usage, timing thresholds) are quantified in §4.                  are performed:
+⊲ We take further responsible actions.                                              • Node addition: A node is added to the database if it has remained
+   To promote the security of the Ethereum ecosystem, we have                         in the discovery table for over 5 minutes and has passed at least
+taken responsible steps throughout the course of this work.                           one liveness check. This check is performed in a recurring cycle
+                                                                                      every 30 seconds.
+    All our identified vulnerabilities and attack workflow were                     • Node deletion: Nodes that have not responded to Ping messages
+    responsibly disclosed to Ethereum official team.                                  within the last 24 hours (as indicated by the lastpong timestamp)
+                                                                                      are removed from the database. This cleanup process is triggered
+   Alongside these disclosures, we proposed concrete mitigation                       every hour.
+strategies, including immediate implementation-level patches as
+well as longer-term protocol design improvements.                                   Data structure of discovery table. The discovery table comprises
+   Last, we summarized our contributions in short:                                  17 K-buckets, each structured according to the Kademlia protocol
+• full exploration on Ethereum’s P2P network (§2);                                  to manage and organize peer information in a P2P network. Nodes
+• a new practical, multi-stage eclipse attack (§3);                                 are grouped based on their XOR distance from the local node and
+• evaluation on testnet and mainnet (§4);                                           are ranked by activity. Since every bucket stores up to 16 active
+• countermeasure suggestions (§6).                                                  nodes, the table can accommodate up to 272 (= 17 × 16) nodes.
+                                                                                       To prevent overrepresentation of nodes from the same subnet,
+2        Dissecting Ethereum P2P Network                                            Ethereum enforces two IP-level restrictions:
+We analyze the network-layer behavior of Ethereum nodes based                       • bucketIPLimit: At most 2 nodes from the same /24 subnet may
+on Geth v1.14.3 [45] (released May 9, 2024), focusing on: (i) node                     reside in any single bucket.
+roles/types; (ii) peerlist management; (iii) connection handling and                • tableIPLimit: Across the entire discovery table, a maximum
+(iv) DNS peerlist management.                                                          of 10 nodes from the same /24 subnet is allowed.
+
+                                                                                    Initialization of discovery table. After the local node starts, the
+2.1       Ethereum Nodes
+                                                                                    table is initialized through the following steps:
+An Ethereum node consists of two coordinated clients: the exe-
+                                                                                    • The local node first loads 30 random nodes from the database and
+cution1 client and the consensus client [46]. The execution client
+                                                                                      adds 4 bootnodes to form 34 seed nodes (via loadSeedNodes).
+handles transaction propagation, while the consensus client is re-
+                                                                                      “Random” means generating an ID and selecting the first node in
+sponsible for block propagation and participation in the PoS con-
+                                                                                      the database with a greater or equal lexicographic ID.
+sensus protocol. Each client connects to their P2P network.
+                                                                                    • It then performs a self-lookup and a random lookup to populate
+1 Thispaper focuses exclusively on the execution client. Unless otherwise stated,     the table with benign nodes (via doRefresh, §2.2), reducing the
+references to an “Ethereum node” refer to the execution client.                       risk of attacker-controlled entries.
+  Once initialization is complete, the discovery table enters a dy-      is evicted from DNS list. Specifically, the devp2p tool awards points
+namic update phase, during which it continuously refreshes its           to crawled nodes in two scenarios:
+entries based on network activity and liveness checks.                   • Startup update bonus. When a crawl begins, the devp2p node
+Update of discovery table. The discovery table is updated via               updates all nodes listed in the DNS peerlist. Any node that is
+node insertion, deletion, and replacement.                                  found to be online receives +1 point.
+• Node filling. The discovery table is populated through both ac-        • Node discovery bonus. During the crawl, the devp2p node selects
+  tive and passive mechanisms. In the active case, the node peri-           peers from its discovery table and sends them FindNode requests.
+  odically runs the doRefresh function (every 15–30 minutes) to             Any node returned in the Neighbors response is also awarded
+  insert seed nodes (loadSeedNodes, see §2.2) and perform three             +1 point.
+  random lookups (lookupRandom) to refresh bucket entries. Each          Crawling schedule. Ethereum launches a devp2p crawler every 5
+  lookup initiates a recursive FindNode query based on a randomly        hours and 40 minutes. Each crawl lasts 30 minutes, repeating 4–5
+  generated target ID, collecting Neighbors responses to progres-        times daily. Nodes from all crawls are merged into an aggregate
+  sively discover closer nodes, which are then stored in the table.      list (all.json), from which the top-N nodes (based on score) are
+  In the passive case, the node adds peers that send it Ping mes-        selected per network – 3000 for mainnet, 250 for testnet.
+  sages during normal operation (lookup recursive search refers
+  to Appendix A).                                                        3     Our Eclipse Attack
+• Node deletion and replacement. The doRevalidate function runs          We target Ethereum execution layer nodes with public IP addresses,
+  every 0–10 seconds, randomly selecting a bucket to verify live-        occupying incoming and outgoing connections of the target node.
+  ness. It pings the latest seen node; if responsive, the node is
+  promoted within the bucket and its ENR is updated if needed. If        3.1    Overview of The Attack
+  unresponsive, it is replaced by a node from the replacement list.      Our attack proceeds in five steps (illustrated in Fig. 1). We present
+                                                                         details for each step in the following sections.
+2.3    Connections Management                                            ① Discovery table poisoning by DB pre-filling. Before the
+By default, the upper bound of connections for an Ethereum node is         target node launches, an attacker pre-fills its local database (DB)
+50, with a maximum of 16 outgoing and 34 incoming connections.             to increase the probability of malicious entries being loaded into
+                                                                           the table upon startup.
+Incoming connections establishment. An Ethereum node allows
+                                                                         ② DNS list poisoning. An attacker continuously injects malicious
+up to 34 incoming connections. Since incoming connections are
+                                                                           ENRs into Ethereum’s DNS-based discovery list prior to target
+passively established, we discuss the reasons why such connection
+                                                                           node’s restart, polluting a secondary peer source.
+attempts may fail in Appendix B.
+                                                                         ③ Network-wide available slots occupation. The attacker pre-
+Outgoing connections establishment. A node maintains up to                 emptively fills available incoming connection slots across the
+16 outgoing connections. After startup, once the discovery table is        network, reducing the number of reachable honest peers when
+initialized, the node begins establishing outgoing connections via         the target node attempts to connect after reboot.
+a dial management loop, which continuously attempts to connect           ④ Outgoing connections hijacking. Upon the target node’s
+to peers if slots are available. Static nodes (manually configured         restart, the attacker activates numerous malicious nodes to send
+peers) are prioritized but are not considered here as they need to be      Ping messages, filling the discovery table. With most honest
+added manually by users. Peers are selected with equal probability         nodes’ incoming slots already occupied, the target node is likely
+from two sources: lookup discovery and DNS discovery. See more             to establish outgoing connections with attacker-controlled peers.
+details of establishing outgoing connections in Appendix C.              ⑤ Incoming connections hijacking. Simultaneously, the at-
+Connections dropping. Dropped connections in the network are               tacker floods the target node with incoming connection requests,
+primarily caused by network-layer issues, such as TCP connection           exhausting incoming connection limits and completing the eclipse.
+timeouts or peer nodes going offline.
+                                                                         3.2    (Step-①) Discovery Table Poisoning
+2.4    Devp2p Tool Management                                            We begin our attack by pre-filling the target node’s persistent data-
+Ethereum uses the devp2p command-line tool, embedded in the              base (i.e., DB) to poison its discovery table upon restart. Normally,
+Geth client, to maintain the official DNS peerlist. Nodes listed here    when a node boots up, it initializes its discovery table with a small
+only support the UDP-based discovery protocol and are crawled            set of seed nodes—some randomly selected from DB, and others
+periodically by the devp2p tool.                                         hardcoded as bootnodes. As a result, even before the node starts
+                                                                         processing unsolicited Ping messages, part of its discovery table is
+Crawler. Each devp2p node concurrently performs: (i) updates to          already occupied by these entries. This limits the attacker’s ability
+nodes listed in the input JSON file, and (ii) iterative peer discovery   to fully control the table post-restart.
+from seed nodes by issuing FindNode queries to known peers.                 To overcome this limitation, we launch a two-stage attack. First,
+Scoring policy. When a devp2p crawler updates a node’s ENR               we inject attacker-controlled nodes into the target’s DB before it
+via a successful ENRResponse, the node gains +1 point. Crawlers          restarts. Then, upon the next boot, these nodes are likely selected
+throttle ENR updates to one every 10 minutes. If a node fails to         as seed nodes, effectively giving the attacker a foothold in the
+respond, its score is halved. Once the score drops below 0, the node     discovery table from the outset.
+      Figure 1: Our Eclipse Attack Workflow (Steps ①–③ operate in parallel in practice, we illustrate them sequentially for clarity.)
+
+
+   To achieve DB poisoning, we send Ping messages from attacker            DNS list within 1–2 days, while a Sepolia testnet node takes about
+nodes to the target node, leveraging the passive discovery behavior        10 days. To improve visibility, we configure nodes with low ENR
+(§2.2), which causes the target to insert those nodes into its discov-     node IDs (e.g., prefixed with leading zeros) so that they are ranked
+ery table. Then, we rely on the node addition logic of the persistent      at the top of crawler input list.
+database (§2.2), which periodically stores discovery table entries            After our nodes are included, we repeatedly trigger score incre-
+that have passed liveness checks for more than 5 minutes into DB.          ments to improve their ranking:
+   To maximize poisoning coverage, we perform the attack in mul-
+tiple rounds, described below:                                               • Identify the official devp2p crawler node;
+  • We detected the restart of the target node.                              • Pre-generate node IDs prefixed with zeros and start nodes to
+  • We immediately send Ping messages from the first round of                  appear first in the crawler’s input file;
+    attacker nodes, which gradually populate both the discovery              • Monitor incoming ENRRequest messages to infer the crawler’s
+    table and DB.                                                              launch time;
+  • Once the first-round nodes are stored in DB, we terminate them           • Activate multiple malicious nodes to Ping the crawler, fill its
+    and launch a second round of attacker nodes. As the first-round            discovery table, and respond to FindNode queries with neighbors
+    nodes go offline, the second-round nodes replace them in the               lists containing our own malicious nodes;
+    discovery table and eventually in DB.                                    • Respond to any ENRRequest from the crawler to gain score in-
+  • We repeat this replacement process across multiple rounds until            crements.
+    DB is sufficiently filled with attacker-controlled ENRs.
+  • Finally, we detect the restart of the target node for a second time,      Once a sufficient number of our nodes reach high scores, they
+    triggering a discovery table initialization phase dominated by         are selected into the top-𝑁 official DNS list used by Geth clients
+    attacker entries drawn from the poisoned database DB.                  at startup, thereby increasing the probability that the target node
+                                                                           connects to malicious peers.
+   This secondary restart is essential. It ensures that the attack
+nodes from the poisoned DB are loaded early into the discovery ta-
+ble, improving the attacker’s success rate. Although the first restart     3.4    (Step-③) Network-wide Slots Occupation
+is needed to initiate the initial discovery table state, subsequent        We preemptively occupy the available incoming connection slots
+rounds do not require restarts, as discovery table entries can still       of as many benign nodes as possible. This blocks the target node
+be updated efficiently while the node is online.                           from establishing connections with honest peers; when the target
+   During the target node’s second restart, we launch a discov-            attempts to connect, it is forced to rely on attacker-controlled nodes
+ery table poisoning attack concurrently. Specifically, 272 attacking       instead—enabling an eclipse attack.
+nodes (matching the 272 slots in the discovery table) send Ping
+messages to the target node to maximize attacker’s occupancy of            3.5    (Step-④) Outgoing Connections Hijacking
+the discovery table. To further improve the occupancy, we modify
+the behavior of the attacking nodes: upon receiving FindNode mes-          After the target node restarts, all of its existing connections are
+sages from the target node, they respond with Neighbors messages           dropped. We take advantage of this reset: since Ethereum lacks an
+that include attacking nodes rather than benign nodes.                     active connection eviction policy, we activate a swarm of attacker
+                                                                           nodes that rapidly send Ping messages to the target. This increases
+                                                                           the chances that the target will select these attacker nodes from its
+3.3    (Step-②) DNS List Poisoning
+                                                                           discovery table or DNS list for outgoing connections.
+Next, we pre-fill the Ethereum DNS discovery list with attacker-
+controlled nodes, such that the target node is likely to select our
+malicious nodes when establishing outgoing connections. Our at-            3.6    (Step-⑤) Incoming Connections Hijacking
+tack proceeds in two main phases.                                          Upon the target node restarts, its incoming connection slots are
+   We first inject malicious nodes into the master DNS list. We            unoccupied. We launch a large number of malicious nodes that
+launch a large number of attacker nodes and keep them stably               aggressively initiate connection requests to the target, aiming to
+online. Empirically, a mainnet node is likely to be included in the        fill all of its incoming connection slots before benign peers connect.
+4     Evaluation of Our Attack                                                         Table 1: Node Filling Rates for Discovery Table
+We implemented our eclipse attack with details deferred to Appen-
+                                                                                      Round                         Experiment times
+dix E. Then, we conducted experimental evaluation towards each
+attack strategy in §3.                                                                           1          2          3          4          5          6
+                                                                                              262/272    249/272    255/272    265/272    257/272    260/272
+                                                                                       1st
+                                                                                              (96.32%)   (91.54%)   (93.75%)   (97.43%)   (94.49%)   (95.59%)
+4.1    Evaluating Step-① (Discovery Table)                                                    256/272    257/272    256/272    264/272    259/272    254/272
+                                                                                       2nd
+We first investigated the attack targeting Ethereum’s node discovery                          (94.12%)   (94.49%)   (94.12%)   (97.06%)   (95.22%)   (93.38%)
+mechanism. In this strategy, an attacker preemptively sends a large
+number of crafted node records to potential victim nodes, aiming
+to insert and maintain attacker-controlled entries in their discovery               The probability that the target node selects peers from the last
+tables. This manipulation increases the likelihood of the attacker              𝑁 buckets when establishing outgoing connections is summarized
+being selected during peer connections, which is the foundation                 in Table 2. Accordingly, we evaluate the discovery table filling rate
+for our eclipse attack. All experiments in this part were conducted             based on the occupancy ratio of the last five buckets, as these have
+on Sepolia testnet.                                                             the highest likelihood of being used for outgoing connections.
+   We begin by measuring the growth scale and storage character-                    We adjust the number of nodes filled in each round. After exper-
+istics of node database to assess the resource cost and practicality            imentation, we observe that the seed nodes selected randomly from
+of such an attack. Next, we design and validate a feasible filling              the DB are typically placed in the last 8 buckets of the discovery
+strategy that complies with the protocol while continuously push-               table. As a result, subsequent rounds of node filling focus only on
+ing malicious records to the target. Finally, we conduct controlled             these 8 buckets, with each round inserting 128 (= 816) nodes.
+experiments to evaluate the effectiveness of the attack, focusing on                Ethereum nodes establish outgoing connections by randomly
+the proportion of attacker nodes in the victim’s discovery table.               generating target node IDs and selecting the closest matching en-
+   Our experimental setup involves deploying attacker and tar-                  tries from discovery table. Therefore, increasing the occupancy
+get nodes on two public servers and we disabled IP-based admis-                 of higher-indexed buckets (i.e., those farther from local node IDs)
+sion limits on the targets. Attack nodes were instantiated to cover             directly improves the likelihood that outgoing connections are
+slots in the target discovery table and repeatedly sent unsolicited             hijacked by attacker-controlled nodes.
+Ping messages to maximize occupancy and evict existing entries.                     We conduct experiments with two initial DB configurations
+Upon receiving a target’s FindNode, attackers should reply with                 (257 and 517 benign seed nodes) and observe consistent results,
+Neighbors containing attacker entries.                                          summarized in Table 2. Below, we describe the impact of DB filling
+Measurement of DB growth. Since the number of benign nodes                      attacks using the 257-node case.
+in the target’s DB directly affects the success of DB stuffing, we                  Without any DB filling, the last 2 buckets of discovery table
+deployed a Sepolia full node on a public network server and moni-               remain empty (0% fill rate), and the last 5 buckets are only 22%
+tored its DB growth from an empty state. As shown in Fig. 2a, the               filled. As DB filling rate increases from 33% to 66%:
+DB grows at an average rate of 200 nodes per month. Based on                    • Without altering attacker node behavior, the last two buckets’
+Ethereum’s official statistics on May 5, 2025, the total number of                  fill rate increases from 37% to 70%, and the last five buckets from
+Sepolia nodes is estimated to be around 2,000. Thus, the maximum                    28% to 44%.
+realistic DB size on Sepolia is expected to reach 2,000 entries.                • When attacker node behavior is adjusted (e.g., ID tuning), the fill
+                                                                                    rate of the last two buckets increases from 36% to 68%, and the
+Feasibility of poisoning. We have two steps. Initial filling: we                    last five buckets from 22% to 76%.
+evaluate whether attacker-controlled nodes can be successfully                      These results show that: (i) Standard DB filling effectively im-
+inserted into an initially empty db. Repeated insertions: we evaluate           proves the occupancy of the last two buckets. (ii) DB filling with
+the feasibility of sustaining and expanding DB presence across                  attacker behavior adaptation significantly boosts the occupancy of
+multiple rounds of poisoning, even after benign entries are added.              the last five buckets, thereby enhancing the success of outgoing
+   Upon the target’s restart, the attacker launched 272 malicious               connection hijacking.
+nodes that continuously Ping the target to populate its discov-
+ery table; we measured the filling rate over time. The first round
+steadily increased attacker-controlled entries to 95% occupancy                 4.2    Evaluating Step-② (DNS List)
+within 24 hours (Fig. 2b, Table 1). After terminating that batch,               We evaluate the feasibility and cost of DNS list poisoning attacks.
+we repeated the procedure with new batches every 2 hours for                    We first locate the identity information of official devp2p nodes to
+a total of six rounds. Each new batch was able to refill the ta-                locate the crawler nodes for the DNS list. Then, we estimate the
+ble—typically to nearly 100%—within about 1 hour of the previous                maximum time required to fill the DNS list with nodes under our
+batch stopping, demonstrating the effectiveness and repeatability               control, providing a worst-case evaluation of the attack cost.
+of the multi-round filling strategy (Fig. 2c, Table 1).
+                                                                                Locate the identity information of devp2p nodes. Following
+Discovery table poisoning. From §2.2, it is known that the divi-                §3.3, we ran five Ethereum mainnet nodes on a public server and
+sion of buckets is based on the number of leading zero bits of the              analyzed logs. From these logs we identified the devp2p crawler IP
+XOR distance of node IDs. The probability 𝑃𝑘 that a randomly gener-             as 34.243.109.22. This crawler uses a randomized key pair and UDP
+                                                 1
+ated ID falls into a certain bucket 𝑘 is: 𝑃𝑘 = 216−𝑘 − 216− 1(𝑘 −1) = 217−𝑘
+                                                                        1
+                                                                            .   port at each startup, as confirmed by repeated observations.
+       (a) DB Size Changes over Time                  (b) Node Filling Changes over Time                  (c) Attack Node Count over Time
+
+                                                Figure 2: Evaluations on Sepolia Testnet
+
+Table 2: Poisoning Discovery Table by DB Pre-filling (init benign seeds: number of benign seed nodes initially in the target’s DB.
+pre-restart DB: avg. DB fill and seed occupation (%) over 10 runs before restart. post-restart fill: avg. fill rate of the last 2, 5, 8,
+and 17 buckets after restart (10 runs). outbound selection rate: prob. that an outbound connection chooses a peer from those
+buckets. behavior changed?: whether attacker behavior was altered. with/without DB poisoning: whether step-① was applied.)
+
+                   init benign seed                  DB fill    seed (%)                    last-2       last-5        last-8        last-17
+                                                       33%         38%                    36%   37%     47%   28%    60%    44%    75%    62%
+                                                       50%         58%                    53%   55%     60%   34%    69%    47%    81%    65%
+                           257
+                                                       60%         68%                    64%   65%     77%   40%    84%    52%    90%    67%
+      with DB                                          66%         73%                    68%   70%     76%   44%    84%    57%    92%    74%
+     poisoning                         pre-restart     33%         42%     post-restart   40%   42%     43%   34%    55%    48%    67%    64%
+                                           DB          50%         56%          fill      58%   60%     65%   43%    74%    51%    79%    64%
+                           517
+                                                       60%         64%                    68%   70%     71%   49%    88%    56%    80%    67%
+                                                       66%         72%                    76%   71%     83%   51%    88%    56%    89%    67%
+      without               -                          0%          0%                      0%      0%   22%   22%    41%    41%    57%    57%
+                                                     behavior changed?                    Yes    No     Yes   No     Yes    No     Yes    No
+                                                            outbound selection rate          75%          96.9%         99.6%         100%
+
+
+Estimation of DNS list filling time. Considering the devp2p tool                In 5 out of 10 experiments, at least some attacker nodes success-
+management in §2.4, to maximize visibility and scoring, our ob-              fully entered the target’s discovery table. In one experiment, all five
+jective is to ensure that attacker-controlled nodes are consistently         attacker nodes reached the maximum score (3 points), demonstrat-
+online and discoverable, receiving the maximum 3-point score dur-            ing the feasibility of DNS list poisoning under controlled conditions.
+ing every crawler session. This allows us to estimate the minimum               We analyze the score distribution of nodes in the Sepolia testnet
+time required to fill the DNS list under ideal conditions.                   DNS list as of July 17, with scores ranging from 275 to 2,688. As-
+   To uphold ethical standards, we did not perform filling attacks           suming each crawl adds only one point to benign nodes and that
+on the official devp2p crawler.Instead we built a minimal controlled         an attacker can earn 3 points per crawl (a net gain of 2 points),
+testbed on two public servers: one runs the target node (no IP re-           the average daily score advantage is 5 (= (30/10 − 1) ∗ 5/2) points.
+strictions, generates a random node ID and UDP port at each startup,         Based on this, we estimate the time required to replace 0%, 25%,
+and uses the latest DNS summary as crawled-node input), and the              50%, 75%, and 100% of DNS list entries, as shown in Table 3.
+other hosts five attacker nodes. The attackers continuously Ping
+the target and, upon FindNode requests, reply with Neighbors mes-
+sages listing all five attacker entries to maximize exposure. The
+experiment was repeated for 10 trials.
+                                                                             4.3      Evaluating Step-③ (Available Slots)
+                                                                             We analyzed the number and distribution of available incoming
+                                                                             connection slots on both Ethereum mainnet and the Sepolia test-
+                                                                             net, and launched a large-scale slots occupation attack targeting
+Table 3: Estimated Time to Reach DNS List Completion under                   all reachable nodes on Sepolia. We probed more than 2,000 public
+Different Filling Rates                                                      Ethereum nodes and discovered that over 80% limit available in-
+                                                                             coming slots to 10 or fewer, supporting the feasibility of large-scale
+            Filling rate   0%    25%   50%   75%     100%
+                                                                             slot occupation. (details in Appendix D).
+                                                                                On July 17, 2025, we screened a total of 1,268 nodes on Sepolia
+             Score         275   325   506   831     2688                    testnet from the official DNS list, measured whether these nodes
+           Time (days)      54    64   100   166     538
+                                                                             had available slots. We detected 321 nodes with available slots. We
+started 200 Sepolia testnet nodes on a public network server and           4.5        Evaluating Step-⑤ (Incoming Connections)
+configured all 1,268 nodes as static nodes.                                We then evaluated attacks on both Sepolia testnet and Ethereum
+   We tried to occupy the incoming available connection slots of           mainnet by monitoring if an attacker could fully occupy incoming
+nodes in the whole network in real world. After two hours, about           connection slots after target nodes restarting.
+90% of the nodes with available slots were occupied, leaving 34                As discussed in §2.3, Ethereum nodes reject all incoming con-
+nodes still with available slots. This means that an available slots       nection requests from the same IP address within 30 seconds. To
+occupation attack is feasible on Sepolia testnet.                          conserve public IP resources during our experiment, we disabled
+                                                                           this rate-limiting restriction on the target nodes. We used two pub-
+4.4    Evaluating Step-④ (Outgoing Connections)                            lic servers: Server 1 and Server 2. On Server 1, we deployed three
+We evaluate the effectiveness of outgoing connection hijacking un-         full nodes as targets for the incoming connection hijacking test. On
+der varying DNS list and DB filling conditions. We conduct experi-         Server 2, we launched 40 attacker nodes configured to pre-establish
+ments in two conditions: before and after network-wide available           peer connections by registering the target nodes as static peers
+slots occupation, to assess the impact on hijacking success.               using the admin.addPeer command in advance.
+• DNS list configuration. Since DNS list filling takes time in practice,       We first start the attack nodes and configure the target nodes
+   we simulate an 𝑛% poisoning of Sepolia’s 250-node DNS list              as static nodes, and then start the target nodes. The experiment
+   by replacing the lowest-scored 250 × 𝑛% entries with attacker-          results are showed in Table 5.
+   controlled nodes.                                                       • On the Sepolia testnet, we conducted 30 trials. In all cases (100%),
+• DB filling configuration. The target node is initialized with 250           attacker nodes successfully hijacked all incoming connections of
+   seed nodes, and we perform two rounds of DB filling to achieve             the target nodes within 30 seconds of restart.
+   a 50% DB poisoning rate.                                                • On mainnet, we conducted 40 trials. In 24 of them (60%), attackers
+Before available slots occupation. We conduct 20 experiments                  fully occupied all incoming connection slots within two days of
+on the Sepolia testnet under DNS list poisoning rates of 0%, 25%, 50%,        the target’s restart. Among these 24 successful trials, 18 (45% of
+75%, and 100%, with the DB filling rate fixed at 50%. Table 4 presents        the total) achieved full occupation within 30 seconds of restart.
+the results. As expected, the success rate of outgoing connection
+hijacking increases as the DNS list poisoning rate rises.                                  Table 5: Incoming Connection Hijacking
+   We also analyzed the source of benign connections in the 56
+experiments where the target node’s incoming connections were               Network                Success rates          Restart interval of target nodes
+not fully occupied. We found that, when the DB filling rate is 50%,           Sepolia       30/30 (100%)   30/30 (100%)                  within 30s
+13 of these experiments (23%) had benign connections originating                                            18/40 (45%)                  within 30s
+from the discovery table, while 51 experiments (91%) had them                mainnet        24/40 (60%)     23/40 (57%)                 within 1 day
+                                                                                                            24/40 (60%)                 within 2 days
+from the DNS list.
+   These results indicate that a 50% DB filling rate can effectively
+limit the target node’s ability to establish benign connections via
+the discovery table.                                                       5 Further Discussion
+After available slots occupation. We evaluated outgoing con-               5.1 Implications of Version Update Frequency
+nections hijacking based on the available slots occupation in §4.3.
+                                                                           The frequency of Ethereum client updates, particularly for Geth2 ,
+Experimental results are shown in Table 4.
+                                                                           directly impacts how often nodes are restarted, which is an event
+    In the case where the DNS list filling rate is 25% and the DB
+                                                                           that can facilitate eclipse attacks due to temporary loss of benign
+filling rate is 50%, the success rate of outgoing connections after
+                                                                           connections. To assess this, we analyzed the release history of
+occupying available slots increased by 10%; in comparison, when
+                                                                           Geth from Ethereum’s Merge (Sep. 15, 2022) to date (May 5, 2025),
+the DNS list filling rate is 50% and the DB filling rate is 50%, the
+                                                                           spanning over 32 months. Within this period, 56 versions were
+success rate of outgoing connections after occupying available slots
+                                                                           released, averaging approximately 1.75 per month. This relatively
+has increased by 50%. The improvement effect is quite significant.
+                                                                           high release cadence implies that mainnet nodes undergo frequent
+                                                                           restarts, as each update generally necessitates one, temporarily
+Table 4: Success Rates of Outgoing Connection Hijacking                    severing all active peer connections.
+before and after Available Slots Occupation (FR: filling rate)                This presents a recurring window of opportunity for attackers
+                                                                           to exploit, as the node becomes momentarily vulnerable to peer
+                                                                           table manipulation and connection hijacking, thereby increasing
+            DNS list FR   DB FR      beofore       after
+                                                                           the feasibility of our proposed eclipse attack.
+                0%         50%       0/20 (0%)         /
+               25%         50%      4/20 (20%)    6/20 (30%)
+               50%         50%      8/20 (40%)   19/20 (95%)               5.2        IP Resources Required for Our Attack
+               75%         50%     13/20 (65%)         /                   We estimate the public IP resources needed to perform each step of
+               100%        50%     19/20 (95%)         /                   the proposed eclipse attack.
+
+                                                                           2 See:   https://github.com/ethereum/go-ethereum/releases/
+① DB pre-filling. Sepolia testnet contains about 2,000 active nodes             same node receives at least 𝑁 independent reports, it is added to a
+  (§4.1), The Sepolia testnet has a node size of approximately 2000             DNS blacklist. This threshold mechanism reduces false positives,
+   nodes, and attackers require 208 public IP addresses with a DB fill          while ensuring that malicious nodes are gradually excluded from
+   rate of 50%. If the attacker wants to achieve a 50% DB fill rate, they       the DNS list.
+   need to fill about 2000 nodes in 16 rounds, each round containing
+  128 nodes (the discovery table allows up to 10 IP addresses from          7     Related Work
+   the same/24 subnet, so 208 (= 13 ∗ 16) public IP addresses are
+   required, each IP running 10 nodes with different ports enabled          Eclipse attacks against Ethereum. Marcuset al. [19] demon-
+   for each node). For the mainnet, which includes roughly 6,000            strated a low-resource eclipse on Geth v1.6.6: with only two attacker
+   nodes (§D), the attacker would need 624 public IP addresses (i.e.,       hosts they could monopolize a target’s incoming and outgoing
+   208 × 3) under the same 50% filling rate assumption.                     connections by exploiting (1) the lack of a post-restart incoming-
+② DNS list poisoning. Due to the constraint that no more than 10            connection cap and (2) the fact that Geth’s UDP listener becomes
+   IPs from the same /24 subnet can appear in the discovery table,          active before bootstrapping, allowing unsolicited Ping-based con-
+   at least 272/10 = 28 distinct public IP addresses are required.          nections. Dahlke et al. [20] showed the method also applies to Parity.
+③ Available slots occupation. To fill the available incoming slots          Henningsen et al. [21] proposed the “False Friends” attack (Geth
+   across the network, the attacker needs to control 200 active nodes.      v1.8.0), using two IPs from different /24 subnets to occupy incoming
+  A node rejects repeated incoming connections from the same IP             slots without requiring a restart, and noting that Geth’s outgoing
+  within 30 seconds (§2.3). Due to limited IP resources (§4.3), all         selection (one head per 17 buckets) can be abused by unsolicited
+   attack nodes were deployed using a single public IP. However,            Pings to seize outgoing slots.
+   assuming no IP constraints, 200 unique public IP addresses would         Eclipse attacks and more. Heilman et al. [41] were the first to
+   allow for rapid occupation of all available slots.                       introduce the concept of the eclipse attack in the context of Bitcoin.
+④ Outgoing connections hijacking. Similar to the DNS filling step,          Their method involves populating the target node’s peer table to
+   this step also requires 28 public IP addresses due to the same /24       monopolize its outgoing connections. Tran et al. [42] proposed a
+   subnet restriction (272/10).                                             more stealthy variant, termed Erebus, which leverages the capabili-
+⑤ Incoming connections hijacking. Each Ethereum node allows up              ties of autonomous system (AS)-level adversaries. By populating
+   to 34 incoming connections by default. In our experiment, we use         the target’s peerlist with IP addresses owned by a malicious AS
+  40 attack nodes to ensure full occupation. To prevent 30-second           and intercepting traffic at the network layer, the attacker gradu-
+   rejection due to repeated IPs, each node requires a unique public        ally positions itself as a persistent intermediary, ultimately gaining
+   IP address—thus, 40 public IPs are needed for this step.                 control over all of the target’s connections. Saad et al. [48] first
+                                                                            introduced the idea of occupying idle connection slots across the
+   Among the five steps, Step-① and Step-③ can reuse the same
+                                                                            network. However, they did not provide experimental validation
+set of public IP addresses. We estimate the total number of distinct
+                                                                            on the Bitcoin network. Shi et al. [44] extended eclipse attack to
+public IPs required for the eclipse attack as follows :
+                                                                            Monero’s network. They proposed a connection reset attack, where
+• Sepolia testnet: 208 + 28 + 28 + 40 = 304 public IPs;
+                                                                            the attacker actively forces the target node to drop existing benign
+• mainnet: 624 + 28 + 28 + 40 = 720 public IPs.
+                                                                            connections without requiring a restart. This enables malicious
+                                                                            peers to rapidly seize those freed slots and establish control over
+6 Countermeasures                                                           the target’s peer set.
+6.1 Against the Adversarial DB Filling
+Establish a blacklist mechanism for high-frequency pings.                   8     Conclusion
+A node records the timestamps of ping messages received from                We presented the first practical eclipse attack on Ethereum’s peer-
+each peer. If a peer sends more than 5 pings within 1 minute,               to-peer network after the Merge. Our attack enables full control
+it is blacklisted, removed from the discovery table, and its UDP            over targeted execution-layer nodes’ incoming and outgoing con-
+messages are dropped. The initial blacklist duration is 1 minute;           nections. We evaluated on both testnet (Sepolia) and mainnet. We
+repeated violations double the duration (2, 4, 8 minutes, etc.) up to       show that an attacker with 304 public IP addresses can achieve a
+a maximum cap (e.g., 24 hours).                                             95% success rate in isolating a target node on Sepolia testnet shortly
+                                                                            after its restart. We provided actionable countermeasures.
+6.2    Against the DNS List Poisoning                                          We also made responsible disclosures to Ethereum. They ac-
+                                                                            knowledged our reported problem and are committed to improving
+At present, there are no restrictions on IP resources in the DNS list,      the P2P layer, though no final fix has been released yet.
+and we believe that this type of attack can be mitigated by limiting
+the attacker’s resources.
+• Limit the number of nodes with the same IP address in DNS                 References
+                                                                             [1] pettinarip, wackerow, bskrksyp9, et al. The merge. Retrieved by July 2025.
+  list. This requires a large amount of IP resources for attackers to            https:// ethereum.org/ en/ roadmap/ merge/ , 2025.
+  effectively carry out DNS list stuffing attacks.                           [2] wackerow, yiannisbot, corwintines, et al. Nodes and clients. Retrieved by July
+• Establish a DNS node blacklist mechanism. Ethereum can                         2025. https:// ethereum.org/ en/ developers/ docs/ nodes-and-clients/ , 2025.
+                                                                             [3] Apostolaki M, Zohar A, and Vanbever L. Hijacking bitcoin: Routing attacks on
+  introduce a community-driven reporting system where users                      cryptocurrencies. IEEE Symposium on Security and Privacy (SP), pages 375–392,
+  submit suspicious DNS nodes along with log evidence. Once the                  2017.
+ [4] Minh Tran, Inho Choi, Gue Joon Moon, and Min Suk Kang. A stealthier parti-          [34] Gao Y, Shi J, Wang X, et al. Practical deanonymization attack in ethereum based
+     tioning attack against bitcoin peer-to-peer network. IEEE Symposium on Security          on p2p network analysis, 2021.
+     and Privacy (SP), pages 894–909, 2020.                                              [35] Klusman R and Dijkhuizen T. Deanonymisation in Ethereum using existing
+ [5] Baek S, Tran M, and Kang M S. On the sustainability of bitcoin partitioning              methods for Bitcoin. Retrieved October, 5:2017–2018, 2023.
+     attacks. Financial Cryptography and Data Security (FC)), 2023.                      [36] Béres F, Seres I A, Benczúr A A, et al. Blockchain is watching you: Profiling and
+ [6] Saad M and Mohaisen D. Three birds with one stone: Efficient partitioning attacks        deanonymizing Ethereum users, 2021.
+     on interdependent cryptocurrency networks. IEEE Symposium on Security and           [37] Dan Lin, Jiajing Wu, Yunmei Yu, Qishuang Fu, Zibin Zheng, and Changlin Yang.
+     Privacy (SP), pages 111–125, 2023.                                                       Denseflow: Spotting cryptocurrency money laundering in ethereum transaction
+ [7] Alex Biryukov, Dmitry Khovratovich, and Ivan Pustogarov. Deanonymisation                 graphs. Proceedings of the ACM Web Conference (WWW), pages 4429–4438, 2024.
+     of clients in Bitcoin P2P network. ACM SIGSAC Conference on Computer and            [38] Wang S, Yang M, Dai W, et al. Deanonymizing ethereum users behind third-party
+     Communications Security (CCS), pages 15–29, 2014.                                        rpc services. IEEE Conference on Computer Communications (INFOCOM), pages
+ [8] Giulia Fanti and Pramod Viswanath. Deanonymization in the bitcoin p2p net-               1701–1710, 2024.
+     work. Advances in Neural Information Processing Systems (NeurIPS), 30, 2017.        [39] Jiaming Zhou, Chao Hu, Jing Chi, et al.               Behavior-aware account de-
+ [9] Alex Biryukov and Sergey Tikhomirov. Deanonymization and linkability of cryp-            anonymization on ethereum interaction graph. IEEE Transactions on Information
+     tocurrency transactions based on network analysis. IEEE European Symposium               Forensics and Security, 17:3433–3448, 2022.
+     on Security and Privacy (EuroSP), pages 172–184, 2019.                              [40] W. Chan and A. Olmsted. Ethereum transaction graph analysis. In 2017 12th
+[10] Chuyuan Feng and Ju Niu. Selfish mining in Ethereum. IEEE International                  International Conference for Internet Technology and Secured Transactions (ICITST),
+     Conference on Distributed Computing Systems (ICDCS), pages 1306–1316, 2019.              pages 498–500, 2017.
+[11] Fabian Ritz and Alf Zugenmaier. The impact of uncle rewards on selfish mining in    [41] Heilman E, Kendler A, Zohar A, and Goldberg S. Eclipse attacks on bitcoin’s peer-
+     ethereum. In 2018 IEEE European Symposium on Security and Privacy Workshops              to-peer network. In USENIX Security Symposium (USENIX Sec), pages 129–144,
+     (EuroS&PW), pages 50–57, 2018.                                                           2015.
+[12] Hongda Kang, Xiang Chang, Ren Yang, Kun Liang, Wei Yu, and Xiapu Luo. Un-           [42] Tran M, Shenoi A, and Kang M S. On the routing-aware peering against network-
+     derstanding selfish mining in imperfect bitcoin and ethereum networks with ex-           eclipse attacks in bitcoin. USENIX Security Symposium (USENIX Sec), pages
+     tended forks. IEEE Transactions on Network and Service Management, 18(3):3079–           1253–1270, 2021.
+     3091, 2021.                                                                         [43] Yves-Christian A. E., Bassem Hammi, Ahmed Serhrouchni, et al. Total eclipse:
+[13] Tanya Tiwari, David Starobinski, and Ari Trachtenberg. Distributed web mining            How to completely isolate a bitcoin peer. Proceedings of the 2018 Third Inter-
+     of ethereum. In International Symposium on Cyber Security Cryptography and               national Conference on Security of Smart Cities, Industrial Control System and
+     Machine Learning (CSCML), pages 38–54, 2018.                                             Communications (SSIC), pages 1–7, 2018.
+[14] T. Chen, Z. Li, Y. Zhu, et al. Understanding ethereum via graph analysis. ACM       [44] Shi R, Peng Z, Lan L, et al. Eclipse attacks on monero’s peer-to-peer network.
+     Transactions on Internet Technology (TOIT), 20(2):1–32, 2020.                            Network and Distributed System Security (NDSS) Symposium, 2025.
+[15] Huashan Chen, Marcus Pendleton, Laurent Njilla, and Shouhuai Xu. A survey           [45] Go Ethereum Team. Fuel depot (v1.14.3). Retrieved by July 2025. https:// github.
+     on Ethereum systems security: Vulnerabilities, attacks, and defenses. ACM                com/ ethereum/ go-ethereum/ releases/ tag/ v1.14.3, 2024.
+     Computing Surveys (CSUR), 53(3):1–43, 2020.                                         [46] wackerow, chainide-agent-bob, m4sterbunny, et al. Node architecture. Retrieved
+[16] Chenyu Li, Ren Zhang, and Xiaorui Gong. A place for everyone vs everyone                 by July 2025. https:// ethereum.org/ en/ developers/ docs/ nodes-and-clients/ node-
+     in its place: Measuring and attacking the ethereum global network. Cryptology            architecture/ , 2025.
+     ePrint Archive, 2025.                                                               [47] fjl, subtly, FrankSzendzielarz, et al. Node discovery protocol. Retrieved by July
+[17] Kim S K, Ma Z, Murali S, et al. Measuring ethereum network peers. Proceedings            2025. https:// github.com/ ethereum/ devp2p/ blob/ master/ discv4.md, 2023.
+     of the Internet Measurement Conference (IMC), pages 91–104, 2018.                   [48] Saad M, Chen S, and Mohaisen D. Syncattack: Double-spending in Bitcoin with-
+[18] Lioba Heimbach, Yann Vonlanthen, Juan Villacis, Lucianna Kiffer, and Roger               out mining power. ACM SIGSAC Conference on Computer and Communications
+     Wattenhofer. Deanonymizing Ethereum validators: The p2p network has a                    Security (CCS), pages 1668–1685, 2021.
+     privacy issue. USENIX Security Symposium (USENIX Sec), 2025.                        [49] corwintines, abraj, wackerow, et al. Crypto-economic security. Retrieved by
+[19] Marcus Y, Heilman E, and Goldberg S. Low-resource eclipse attacks on                     July 2025. https:// ethereum.org/ en/ developers/ docs/ consensus-mechanisms/ pos/
+     Ethereum’s peer-to-peer network. Cryptology ePrint Archive, 2018.                        #crypto-economic-security, 2024.
+[20] Dahlke G and Eisenbarth T. Low-resource eclipse attacks on alternative ethereum     [50] wackerow, arredr2, baumstern, et al. Client diversity. Retrieved by July 2025.
+     clients. IEEE European Symposium on Security and Privacy Workshops (EuroSPW),            https:// ethereum.org/ en/ developers/ docs/ nodes-and-clients/ client-diversity/ , 2025.
+     pages 45–52, 2018.
+[21] Henningsen S, Teunis D, Florian M, et al. Eclipsing Ethereum peers with false
+     friends. IEEE European Symposium on Security and Privacy Workshops (EuroSPW),       A      The Lookup Recursive Search Process of
+     2019.
+[22] Wüst K and Gervais A. Ethereum eclipse attacks. Technical report, ETH Zurich,
+                                                                                                Node Filling
+     2016.                                                                               The node lookup of the discovery table is an iterative process. The
+[23] Heo H, Woo S, Yoon T, et al. Partitioning ethereum without eclipsing it. In
+     Network and Distributed System Security (NDSS) Symposium, 2023.                     recursive search algorithm process is as follows:
+[24] Gencer A E, Basu S, Eyal I, et al. Decentralization in bitcoin and ethereum         i) Randomly generate a node ID;
+     networks. International Conference on Financial Cryptography and Data Security
+     (FC), pages 439–457, 2018.
+                                                                                         ii) Find the 16 nodes closest to the ID from the node list, with a set
+[25] Maeng S H, Essaid M, and Ju H T. Analysis of Ethereum network properties and            of N0 nodes. Sort them in order of their distance from the node
+     behavior of influential nodes. Asia-Pacific Network Operations and Management           ID in i), from near to far;
+     Symposium (APNOMS), pages 203–207, 2020.
+[26] Masoud M Z, Jaradat Y, Manasrah A, et al. A measurement study of the ethereum       iii) In N0 , in the order of ii), select a node that has not been queried
+     underlying P2P network. Computers, Materials & Continua, 78(1), 2024.                   (and has not sent a FindNode message to that node), send a
+[27] Lee X T, Khan A, Sen Gupta S, et al. Measurements, analyses, and insights on            FindNode message, label the node as queried, and merge the 16
+     the entire Ethereum blockchain network, 2020.
+[28] Kiffer L, Salman A, Levin D, et al. Under the hood of the Ethereum gossip               nodes in the received Neighbors messages with N0 . Find the 16
+     protocol, 2021.                                                                         nodes closest to the ID from the merge and replace the nodes in
+[29] Eisenbarth J P, Cholez T, and Perrin O. Ethereum’s peer-to-peer network moni-
+     toring and Sybil attack prevention. Journal of Network and Systems Management,
+                                                                                             N0 . The nodes in the received neighbor messages are stored in
+     30(4):65, 2022.                                                                         the discovery table of the local node;
+[30] Gao Y, Shi J, Wang X, et al. Topology measurement and analysis on Ethereum          v) Repeat the iteration of iii) until all nodes in N0 have been queried,
+     P2P network, 2019.
+[31] Li K, Tang Y, Chen J, et al. Toposhot: Uncovering Ethereum’s network topology           and the iteration ends.
+     leveraging replacement transactions, 2021.
+[32] Zhao C, Zhou Y, Zhang S, et al. Dethna: Accurate ethereum network topology          B     The Reasons why Incoming Connection
+     discovery with marked transactions, 2024.
+[33] Pedro Silva, David Vavricka, João Barreto, and Luís Rodrigues. Impact of geo-             Attempts fail
+     distribution and mining pools on blockchains: A study of ethereum. In 2020 50th
+     Annual IEEE/IFIP International Conference on Dependable Systems and Networks        First, if the node has already reached its incoming connection limit,
+     (DSN), pages 245–252, 2020.                                                         new requests are automatically denied. Second, the node enforces a
+rate-limiting policy that rejects all incoming connections from the                   • Select a node to establish a TCP connection. The local node extracts
+same IP address within a 30-second interval to prevent repeated                         the node enr record from the node tree and extracts information
+rapid attempts. Finally, connections may be rejected due to protocol-                   such as node ID, IP, TCP port, etc. from the enr record. The local
+level issues, such as mismatched network IDs or fork IDs, receipt of                    node attempts to establish a TCP connection with the node based
+malformed or excessively long handshake messages (e.g., during the                      on this information.
+ETH or Snap protocol negotiation), duplicate connection attempts,
+or connections from the same peer ID.                                                 D     Available Slots Measurement in Ethereum
+   Further details on these rejection conditions can be found in the                        P2P Network
+handshake failure logic of the RLPX3 , ETH4 , and Snap5 .
+                                                                                      Measurement of nodes with available slots. To measure the
+C     Selecting Outgoing Connections                                                  availability of inbound connection slots, we extracted node sets for
+                                                                                      Ethereum mainnet and the Sepolia testnet from DNS lists publicly
+There are two outgoing connection selection resources for an Ethereum                 maintained by Ethereum (snapshot taken at 09:50 UTC on July 1st,
+node, namely, lookup discovery and DNS discovery. We will intro-                      2025). Our probing program, deployed on a cloud server in the
+duce the two node-discovery methods below.                                            United States, monitored these nodes continuously over a 24-hour
+Node source based on lookup discovery. The node source based                          period. Each node was scanned hourly to determine its online status
+on lookup discovery can cache up to 16 nodes. When the node                           and the number of available incoming connection slots.
+source is empty, the local node will enable lookup discovery. Each                       We report the average results across 24 hourly scans in Table 6.
+lookup discovery targets the same target ID and requires multi-                       Each scan cycle took approximately 11 minutes for the mainnet
+ple iterations. Below is an introduction to the iterative process of                  node set and 6 minutes for Sepolia. The temporal variation in the
+each lookup. At the beginning of each lookup, the first step is to                    number of nodes with available slots is in Fig. 3.
+determine whether the local list has been searched:                                      We observe that the online rate of nodes on both Sepolia testnet
+• No, then this iteration is the initial iteration round for this lookup              and mainnet is consistently high, at approximately 85%. However,
+   discovery. A node ID is randomly generated as the target ID for                    there exists a stark contrast in the proportion of nodes with avail-
+   this lookup discovery, and the 16 nodes closest to the target                      able inbound connection slots: around 30% of Sepolia nodes have
+   ID are selected from the local node list. They are sorted from                     available slots, compared to only about 3% on mainnet. This indi-
+   small to large according to their distance from the target ID and                  cates that while overall node availability is similar, Sepolia exhibits
+   added to the cache list result_entries for this lookup discovery.                  significantly greater slot openness.
+   Meanwhile, these 16 nodes are added to the lookup_buffer and
+   marked as seen. This round of iteration ends.                                      Table 6: Measurement of Nodes with Available Incoming
+• Yes, select a node from the cache list that has not been queried                    Connection Slots in the Entire Network
+   in order, send it a FindNode message, and receive Neighbors
+   messages. Combine the 16 nodes in the Neighbors messages
+                                                                                                                           Average number of nodes
+   with the nodes in the cache list, retain the 16 nodes closest to the                   No.   Network
+   target ID, and sort them from small to large according to their                                               Online           Offline       with available slots
+   distance from the target ID. Meanwhile, these 16 nodes are taken                    1500       Sepolia      1288 (85.9%)     212 (14.1%)           469 (31.3%)
+   from nodes that are not in the list, added to the lookup_buffer,                    5887      mainnet       4979 (84.6%)     908 (15.4%)           168 (2.8%)
+   and marked as seen. This round of iteration ends.                                       No.: number of detected nodes
+    The end condition for each lookup is that all nodes in the cache                       available slots: the available incoming connection slots
+list searched in this lookup have been queried.
+Node source based on DNS discovery. After the local node is                           Distribution of available slots quantity. We launched 100 at-
+started and initialized in the node list, it will retrieve nodes from                 tack nodes on a public network server to actively occupy the idle
+the URL of the candidate node list discovered based on DNS and                        connection slots of Ethereum nodes with available slots. Addition-
+store them all in the dns_buffer buffer.                                              ally, a dedicated detection node was deployed to verify whether all
+    The DNS discovery process is as follows:                                          available slots had been successfully filled.
+• Obtaining DNS seeds. In the source code of the Ethereum client,                        The measurement results are summarized in Table 7 and Fig. 4.
+   a specified DNS domain name is hard coded and used as a DNS                        It can be seen from the table that the number of nodes with less
+   seed to initiate the node discovery process;                                       than 10 available slots on Sepolia testnet and mainnet accounts for
+• Query DNS records and construct a node tree. Local nodes recur-                     the majority of the number of available slot nodes, which are 80.1%
+   sively query subdomains based on branch information provided                       and 62.7% respectively.
+   in the DNS domain name until all leaf node ENR records are
+   obtained, and construct a DNS node tree.                                           E     Pseudocode for Our Eclipse Attack
+3 RLPX  protocol handshake failure: https://github.com/ethereum/go-ethereum/blob/     We provide implementation details of our attack (cf. Algorithm 1),
+v1.14.3/p2p/peer_error.go#L75                                                         covering the main logic and several key functions.
+4 ETH protocol handshake failure: https://github.com/ethereum/go-ethereum/blob/v1.
+                                                                                         In Algorithm 1, we give the detailed implementation process of
+14.3/eth/protocols/eth/protocol.go#L67
+5 Snap protocol handshake failure section, refer to https://github.com/ethereum/go-   the eclipse attack against Ethereum, including the main control
+ethereum/blob/v1.14.3/eth/protocols/snap/protocol.go#L59.                             logic and several key subprograms.
+               (a) Node Statistics on Sepolia Testnet                                               (b) Node Statistics on Mainnet
+
+                                                  Figure 3: Node Statistics in Ethereum P2P Network
+
+
+
+
+   (a) Available Slots Count Distribution on Sepolia Testnet                             (b) Available Slots Count Distribution on Mainnet
+
+                                             Figure 4: Available Slots Count in Ethereum P2P Network
+
+  Table 7: Available Slots Distribution in Ethereum Nodes                          Upon the above operations are executed, the attack main loop
+                                                                               starts to run: continuously obtain the current number of incoming
+                                Distribution of available slots                connections and outgoing connections (get_occupied_incon and
+  No.    Network
+                           1-10           11-50         51-99       100+
+                                                                               get_occupied_outcon) of the target node, and compare them with
+                                                                               the maximum number of allowed connections (34 and 16 respec-
+  362     Sepolia       290 (80.1%)     60 (16.6%)     5 (1.4%)    7 (1.9%)    tively). As long as the connection slots are still unoccupied, the
+  102     mainnet       64 (62.7%)       10 (9.8%)     5 (4.9%)   23 (22.5%)   attacker will continue to launch connection attempts.
+    No.: number of nodes with available slots                                      When the incoming and outgoing connections of the target node
+    Note: The detection duration for both networks was 7 hours.                are all controlled by the attacking nodes, it means that the node is
+                                                                               completely isolated from the honest network, and the eclipse attack
+                                                                               is successfully completed.
+
+   In the attack initialization phase, two sub threads are started
+at the same time: one is to execute the db_pre_filling_attack                  F    Features of Ethereum 2.0’s P2P Network
+on the target node, polluting its local DB; the other is to execute            We extend our discussion in §1. We presents key features of Ethereum
+the dns_list_poisoning_attack on the official devp2p network                   2.0’s P2P network. We focus on the validator behaviors in PoS and
+crawler node of Ethereum. Next, the attacker continuously monitors             the importance of client diversity.
+whether the target node is online until it detects its restart.                Long-term online presence of PoS validators. In PoS systems,
+   After the target node restarts, the attacker immediately starts             validators are expected to maintain a persistent online presence,
+three operations: 1) Execute occupy_available_slots_attack                     which is critical for ensuring the security, availability, and liveness
+on all nodes in the network, and try to preempt the incoming                   of the network. Unlike miners in PoW systems who can participate
+connection slots of all active nodes, so that the target node cannot re-       sporadically, PoS validators are continuously involved in block pro-
+establish the connection with the benign nodes when it restarts; 2)            posal and finalization processes. Their availability directly impacts
+Perform the discovery_table_poisoning_attack on the target                     the network’s ability to reach consensus finality.
+node to ensure that the attacking nodes are dominant in its restarted             The validators who remain offline not only miss out on rewards
+discovery table; 3) Start to occupy_in_connections of the target               but also incur economic penalties [49]. These include being grad-
+node and make it connected by attacking nodes.                                 ually penalized for inactivity and potentially being slashed for
+          Yuxuan Liang1, Zijun Guo1, Qin Wang2, Lina Lan1„ Chenfeng Wang1, Zhuoyi Zheng1„
+
+ Algorithm 1: Our Eclipse Attack against Ethereum                                  To further ensure network resilience, Ethereum implements an
+                                                                               inactivity leak mechanism: when a significant portion of validators
+     Input: TargetNode = (target_ip, target_port)
+     Data: OccupiedInConnections = 0,                                          go offline, their stake influence is gradually reduced, enabling the
+     OccupiedOutConnections = 0,                                               remaining active validators to finalize the chain. This design un-
+     AllActiveNodes = nodes in Ethereum Sepolia testnet,
+     OfficialDevp2pNode = the Ethereum official devp2p crawl node,
+                                                                               derscores the importance of validator uptime in maintaining the
+     N = the rounds of db filling attack,                                      health and security of PoS-based blockchains.
+     AttackNodes = our controlled nodes,                                       Client diversity. In Ethereum’s current architecture, clients are
+     MaxInConnectionsOfTargetNode = 34,
+     MaxOutConnectionsOfTargetNode = 16                                        divided into two categories: the Execution Layer and the Consensus
+ 1 StartThread(db_pre_filling_attack(AttackNodes, TargetNode, N ))             Layer. The Execution Layer handles transaction execution and state
+ 2 StartThread(dns_list_poisoning_attack(AttackNodes, OfficialDevp2pNode))     updates, while the Consensus Layer is responsible for verifying
+ 3 while is_target_online(TargetNode) do                                       consensus and finalizing blocks. Execution clients such as Geth,
+ 4      wait()
+                                                                               Nethermind, Erigon, and Besu process transactions, maintain state,
+ 5 StartThread(occupy_available_slots(AttackNodes, AllActiveNodes))            and propagate blocks. In contrast, consensus clients like Prysm,
+ 6 wait_for(TargetNode_reboot())
+ 7 StartThread(discovery_table_poisoning_attack(AttackNodes,
+                                                                               Lighthouse, Teku, Nimbus, and Lodestar verify blocks, maintain
+    TargetNode))                                                               the beacon chain, and generate consensus.
+ 8 StartThread(occupy_in_connections(AttackNodes, TargetNode))                     This modular design enhances the system’s flexibility and re-
+ 9 while OccupiedOutConnections < MaxOutConnectionsOfTargetNode and
+                                                                               silience, allowing users to freely pair execution and consensus
+    OccupiedInConnections < MaxInConnectionsOfTargetNode do
+10      OccupiedOutConnections = get_occupied_outcon(TargetNode)               clients according to their needs. However, the usage distribution
+11      OccupiedInConnections = get_occupied_incon(TargetNode)                 among clients remains imbalanced [50]. Clients like Geth and Prysm
+12 return ok                                                                   still dominate market share, posing a risk of centralization. As a
+13                                                                             result, the Ethereum community places strong emphasis on client
+14 Subroutines                                                                 diversity, encouraging node operators to adopt a variety of imple-
+15       discovery_table_poisoning_attack(attack_node_set, target_node)        mentations to improve the network’s robustness and security.
+         Data: param1: attack_node_set, param2: target_node;
+16       foreach attack_node in attack_node_set do
+17           attack_node.send_ping(target_node)                                Ethics Considerations
+18           attack_node.wait_pong(target_node)                                All the eclipse attack experiments involved in this study were con-
+19           attack_node.send_pong(target_node)
+                                                                               ducted in a strictly controlled environment and did not have any
+20           attack_node.wait_findnode(target_node)
+21           attack_node.send_neighbors(AttackNodes)                           impact on mainnet or any actual operating systems. This includes
+22           attack_node.wait_enrrequest(target_node)                          technical means such as DNS list poisoning, connection hijacking,
+23           attack_node.send_enrresponse(target_node)                         and DB pre-filling (our attacking steps ①-⑤), which are only applied
+24       db_pre_filling_attack(attack_node_set, target_node, N )               to the target nodes we independently built. We have not conducted
+         Data: param1: attack_node_set, param2: target_node, param3: N ;       any unauthorized access, denial of service attacks, or caused in-
+25       for i = 0 in N do                                                     terference to third-party nodes. Our experiments is to evaluate
+26            discovery_table_poisoning_attack(attack_node_set, target_node)
+                                                                               the feasibility and potential risks of eclipse attacks in a controlled
+27       dns_list_poisoning_attack(attack_node_set, official_node)             environment. All data collected during the research process, such
+         Data: param1: attack_node_set, param2: official_node;
+28       while true do                                                         as node identity, connectivity behavior, and rating changes, are
+29           discovery_table_poisoning_attack(attack_node_set,                 sourced from publicly observable information or controlled interac-
+               official_node)                                                  tions and do not involve the collection of any sensitive information.
+30       occupy_available_slots(attack_node_set, node_set)                        In accordance with responsible disclosure practices, we have
+         Data: param1: attack_node_set, param2: node_set;                      submitted a full vulnerability report to the Ethereum official team.
+31       foreach attack_node in attack_node_set do
+32           foreach node in node_set do                                       The report includes detailed descriptions of the attack scenarios,
+33                attack_node.connect(node)                                    reproduction steps, and our proposed fixes.
+                                                                                  We believe that responsible research on security threats is crucial
+34       occupy_in_connections(attack_node_set, target_node)
+         Data: param1: attack_node_set, param2: target_node;
+                                                                               for enhancing the robustness of decentralized systems.
+35       foreach attack_node in attack_node_set do
+36           attack_node.connect(target_node)
+
+37       get_occupied_outcon(attack_node_set)
+         Data: param1: attack_node_set;
+38       return count of outbound connections to attack_node_set
+39       get_occupied_incon(attack_node_set)
+         Data: param1: attack_node_set;
+40       return count of inbound connections from attack_node_set
+
+
+
+
+prolonged downtime or misconduct. This financial incentive struc-
+ture encourages validators to keep their nodes online and reliably
+connected.
+

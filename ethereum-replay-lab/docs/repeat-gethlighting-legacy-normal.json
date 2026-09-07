@@ -1,0 +1,40 @@
+{
+  "profile": "gethlighting-legacy",
+  "scenario": "normal",
+  "rounds": 3,
+  "results": [
+    {
+      "run_id": "normal-repeat-1",
+      "rc": 0,
+      "elapsed_s": 85.6,
+      "manifest": true,
+      "evidence": {
+        "mined_blocks": 34,
+        "victim_imported_segments": 24,
+        "victim_last_block": 5
+      }
+    },
+    {
+      "run_id": "normal-repeat-2",
+      "rc": 0,
+      "elapsed_s": 83.9,
+      "manifest": true,
+      "evidence": {
+        "mined_blocks": 33,
+        "victim_imported_segments": 23,
+        "victim_last_block": 5
+      }
+    },
+    {
+      "run_id": "normal-repeat-3",
+      "rc": 0,
+      "elapsed_s": 82.5,
+      "manifest": true,
+      "evidence": {
+        "mined_blocks": 33,
+        "victim_imported_segments": 24,
+        "victim_last_block": 5
+      }
+    }
+  ]
+}
