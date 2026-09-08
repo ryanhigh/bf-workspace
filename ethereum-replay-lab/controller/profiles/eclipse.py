@@ -246,6 +246,32 @@ def _write_script(path: Path, network_id: int, nodekey: str, config: str,
     path.chmod(0o755)
 
 
+def _write_attacker_script_dsl(path: Path, network_id: int, nodekey: str,
+                                config: str) -> None:
+    """DSL-mode attacker entrypoint: start geth in background, then
+    `tail -f` the log forever so the container stays up while the
+    controller drives admin_addPeer via the strategy DSL."""
+    path.write_text(
+        "#!/bin/sh\nset -eu\n"
+        "geth init --datadir=/data /genesis.json\n"
+        "cat > /data/geth.toml <<'EOF'\n"
+        f"{config}"
+        "EOF\n"
+        "nohup geth "
+        f"--networkid={network_id} "
+        f"--nodekeyhex={nodekey} --datadir=/data "
+        "--config=/data/geth.toml "
+        "--http --http.addr=0.0.0.0 --http.port=8545 "
+        "--http.api=admin,eth,net,web3 "
+        "--authrpc.port=0 --ipcdisable --port=30303 "
+        "--maxpeers=50 --nodiscover "
+        "> /data/geth.log 2>&1 &\n"
+        "echo \"attacker-dsl: geth pid=$!\"\n"
+        "exec tail -F /data/geth.log\n"
+    )
+    path.chmod(0o755)
+
+
 def _write_attacker_script(path: Path, network_id: int, nodekey: str,
                            config: str) -> None:
     """Attacker entrypoint: two stages.
@@ -383,22 +409,31 @@ class Adapter(BaseAdapter):
         # so it can find *some* peer at boot (admin API on 127.0.0.1).
         # The actual attack dial happens AFTER geth is up via the
         # dial_victim.sh helper loop, which runs as the entrypoint's
-        # second stage.
+        # second stage — UNLESS ECLIPSE_STRATEGY_JSON is set, in which
+        # case the strategy DSL (controller-side) drives admin_addPeer
+        # and the attacker entrypoint just keeps geth alive.
+        dsl_mode = bool(os.environ.get("ECLIPSE_STRATEGY_JSON"))
         for i, atk in enumerate(attackers):
             attacker_config = _config_block(50, static_enodes=[bootnode_enode])
-            _write_attacker_script(
-                work / f"attacker{i}.sh",
-                NETWORK_ID,
-                atk["nodekey_hex"],
-                attacker_config,
-            )
+            script_path = work / f"attacker{i}.sh"
+            if dsl_mode:
+                _write_attacker_script_dsl(script_path, NETWORK_ID,
+                                            atk["nodekey_hex"],
+                                            attacker_config)
+            else:
+                _write_attacker_script(
+                    script_path, NETWORK_ID, atk["nodekey_hex"],
+                    attacker_config,
+                )
 
         # Common dial loop — waits for geth to be up on 127.0.0.1:8545,
         # then continuously dials the victim (resolved via docker DNS).
-        (work / "dial_victim.sh").write_text(
-            "#!/bin/sh\n" + _attacker_dial_script("victim")
-        )
-        (work / "dial_victim.sh").chmod(0o755)
+        # Only written when we're in shell mode.
+        if not dsl_mode:
+            (work / "dial_victim.sh").write_text(
+                "#!/bin/sh\n" + _attacker_dial_script("victim")
+            )
+            (work / "dial_victim.sh").chmod(0o755)
 
         compose_path = work / "docker-compose.yml"
         compose_path.write_text(self._compose(n_attackers))
@@ -499,26 +534,140 @@ services:
 """
 
     def run_actions(self, prepared: dict[str, Any]) -> dict[str, Any]:
-        """Stage-a/b/c: nothing to schedule. The attackers' own
-        entrypoint loops continuously to dial the victim.
+        """Two execution modes:
 
-        Stage-d: nothing scheduled here either, but the caller is
-        expected to have arranged for attackers to PING the victim
-        before it boots (handled in compose `depends_on` ordering).
+        1. **DSL mode** (env `ECLIPSE_STRATEGY_JSON` set to a JSON file
+           path) — load the strategy DSL described in
+           `profiles/eclipse_strategy.py` and execute it from this
+           process against each attacker's admin RPC. The shell
+           entrypoint in each attacker container just keeps geth alive.
 
-        Returns a summary noting the stage.
+        2. **Shell mode** (default — env not set) — attacker's own
+           entrypoint script does the dial loop, as before. Stage-d
+           is shell-only because it relies on the victim connecting
+           first; there is nothing to drive from the controller.
+
+        Either way the per-attacker events are appended to
+        `events.jsonl` so downstream analysis is unchanged.
         """
-        actions = ["attackers_active_loop"]
-        if self.scenario == "stage-d":
-            actions.append("pre_fill_before_victim_boot")
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).parent))
+        from eclipse_strategy import (ExecContext, Executor, Strategy,
+                                       stage_a_strategy, stage_b_strategy,
+                                       stage_d_strategy, DockerExecExecutor)
+
+        n_atk = prepared.get("n_attackers", 0)
+        strat_path = os.environ.get("ECLIPSE_STRATEGY_JSON")
+        results_summary: dict[str, Any] = {
+            "scenario": self.scenario, "n_attackers": n_atk,
+            "mode": "dsl" if strat_path else "shell",
+        }
+
+        if strat_path:
+            strat = Strategy.from_json_file(_Path(strat_path))
+            results_summary["strategy_uid"] = strat.uid
+        elif self.scenario == "stage-a":
+            strat = Strategy.from_dict(stage_a_strategy())
+        elif self.scenario == "stage-b":
+            strat = Strategy.from_dict(stage_b_strategy(n_atk))
+        elif self.scenario == "stage-d":
+            strat = Strategy.from_dict(stage_d_strategy())
+        else:
+            # stage-c and any future stages: build dynamically by cloning
+            # stage-b and scaling burst_dial repeats + waits.
+            strat = Strategy.from_dict(stage_b_strategy(n_atk))
+
         append_event(self.run_dir, {
             "event_type": "eclipse.actions.scheduled",
             "scenario": self.scenario,
-            "n_attackers": prepared.get("n_attackers", 0),
-            "actions": actions,
+            "n_attackers": n_atk,
+            "mode": results_summary["mode"],
+            "strategy_uid": strat.uid,
+            "n_steps": len(strat.steps),
         })
-        return {"actions_run": actions, "scenario": self.scenario,
-                "n_attackers": prepared.get("n_attackers", 0)}
+
+        if results_summary["mode"] == "shell":
+            # Original behaviour: just record that the attackers' shell
+            # entrypoint is responsible.
+            actions = ["attackers_active_loop"]
+            if self.scenario == "stage-d":
+                actions.append("pre_fill_before_victim_boot")
+            results_summary["actions"] = actions
+            return results_summary
+
+        # DSL mode: actually run the strategy against each attacker.
+        # Controller is a host-side Python process, so it cannot reach
+        # the attacker's HTTP RPC directly on its docker-network IP
+        # (172.80.1.50+). We therefore shell out via `docker exec
+        # <container> wget ...` instead.
+        n_atk_local = n_atk
+        attacker_container_names = [
+            f"erl_eclipse-{self.run_dir.name}-attacker{i}-1"
+            for i in range(n_atk_local)
+        ]
+        import urllib.request, urllib.error
+        def _wait_for_attackers(deadline_s: float = 120.0) -> None:
+            import subprocess
+            t_end = time.time() + deadline_s
+            while time.time() < t_end:
+                ok = 0
+                for c in attacker_container_names:
+                    try:
+                        proc = subprocess.run([
+                            "docker", "exec", c,
+                            "wget", "-qO-", "--timeout=2",
+                            "--post-data="
+                                '{"jsonrpc":"2.0",'
+                                '"method":"net_version",'
+                                '"params":[],"id":1}',
+                            "--header=Content-Type: application/json",
+                            "http://127.0.0.1:8545"],
+                            capture_output=True, text=True, timeout=5)
+                        if (proc.returncode == 0
+                                and '"result"' in proc.stdout
+                                and "null" not in proc.stdout[:200]):
+                            ok += 1
+                    except Exception:
+                        pass
+                if ok >= 1:
+                    append_event(self.run_dir, {
+                        "event_type": "dsl.attacker_rpc_ready",
+                        "ready": ok, "total": n_atk_local})
+                    return
+                time.sleep(3)
+            append_event(self.run_dir, {
+                "event_type": "dsl.attacker_rpc_timeout",
+                "warn": "no attacker RPC answered within deadline"})
+        _wait_for_attackers()
+
+        per_attacker = []
+        for idx, c in enumerate(attacker_container_names):
+            ctx = ExecContext(
+                attacker_rpc=f"http://127.0.0.1:8545",  # inside container
+                victim_rpc="http://victim:8545",       # inside container
+                victim_ip="172.80.1.20",               # for IP rewrite
+                log_sink=lambda kind, payload, _i=idx: (append_event(
+                    self.run_dir,
+                    {"event_type": f"attacker{_i}.{kind}", **payload}), None)[1],
+            )
+            # Patch the action implementations so they reach the attacker
+            # / victim via docker exec instead of urllib.
+            exec_ = DockerExecExecutor(ctx, c, self.run_dir, idx)
+            try:
+                results = exec_.run(strat)
+                ok = sum(1 for r in results if r.success)
+                per_attacker.append({"attacker": idx, "actions_ok": ok,
+                                     "actions_total": len(results)})
+            except Exception as e:
+                per_attacker.append({"attacker": idx, "error": str(e)})
+        results_summary["per_attacker"] = per_attacker
+        append_event(self.run_dir, {
+            "event_type": "actions.done",
+            "scenario": self.scenario,
+            "per_attacker": per_attacker,
+        })
+        return results_summary
 
 
 def _attacker_dial_script(victim_dns: str = "victim") -> str:

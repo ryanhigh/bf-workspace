@@ -1,0 +1,30 @@
+{
+  "uid": "bunnyfinder-smoke",
+  "category": "withholding-stub",
+  "phases": [
+    {
+      "t_rel_seconds": 0,
+      "phase": "PREP",
+      "actions": [
+        {"name": "sleep", "params": {"seconds": 2}},
+        {"name": "set_strategy", "params": {"strategy": "withholding"}},
+        {"name": "delay_to_next_slot", "params": {"fallback_seconds": 12}}
+      ]
+    },
+    {
+      "t_rel_seconds": 15,
+      "phase": "ATTACK",
+      "actions": [
+        {"name": "modify_parent_root", "params": {"slot_offset": 1}},
+        {"name": "store_signed_attest", "params": {}}
+      ]
+    },
+    {
+      "t_rel_seconds": 30,
+      "phase": "SETTLE",
+      "actions": [
+        {"name": "set_strategy", "params": {"strategy": "settle"}}
+      ]
+    }
+  ]
+}

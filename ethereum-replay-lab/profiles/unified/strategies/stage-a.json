@@ -1,0 +1,30 @@
+{
+  "uid": "eclipse-stage-a-unified",
+  "category": "single-attacker-dial",
+  "phases": [
+    {
+      "t_rel_seconds": 0,
+      "phase": "PREP",
+      "actions": [
+        {"name": "sleep", "params": {"seconds": 3}},
+        {"name": "resolve_enode", "params": {}},
+        {"name": "add_static_peer", "params": {}}
+      ]
+    },
+    {
+      "t_rel_seconds": 20,
+      "phase": "ATTACK",
+      "actions": [
+        {"name": "burst_dial", "params": {"repeats": 3, "interval_s": 2}},
+        {"name": "sample_peers", "params": {}}
+      ]
+    },
+    {
+      "t_rel_seconds": 40,
+      "phase": "SETTLE",
+      "actions": [
+        {"name": "sample_peers", "params": {}}
+      ]
+    }
+  ]
+}
