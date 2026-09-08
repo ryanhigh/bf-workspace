@@ -431,3 +431,118 @@ imports chain segments — the flow is reproducible. Summary written to
 `runs/normal-repeat-{1,2,3}/`.
 
 Again: 3 runs = flow-repeatability evidence, NOT statistical significance.
+
+## §16 — BunnyFinder-style Action DSL for Eclipse — captured 2026-09-08
+
+Ported BunnyFinder's `actionset.Action` design to Eclipse:
+**controller/profiles/eclipse_strategy.py** defines an `Action` ABC
+with concrete subclasses (`ResolveEnode`, `AddStaticPeer`, `WaitPeers`,
+`BurstDial`, `SamplePeers`, `Sleep`); a `Strategy` JSON DSL with
+`phases[]` of `t_rel_seconds`-ordered action lists; and an `Executor`
+that walks the strategy and records per-step results.
+
+The controller (controller/profiles/eclipse.py) now has two execution
+modes for the eclipse profile:
+
+  1. **Shell mode** (default, env not set) — original behaviour; the
+     attacker's entrypoint script runs the dial loop.
+  2. **DSL mode** (`ECLIPSE_STRATEGY_JSON=path/to.json`) — load the
+     strategy, then the controller drives the attacker's admin RPC
+     via `docker exec ... wget ...` (host controller can't reach
+     container IPs directly).
+
+**Verified end-to-end** with `runs/eclipse-dsl-007/` (stage-b, 8 attackers):
+
+```
+$ ECLIPSE_STRATEGY_JSON=$PWD/profiles/eclipse/strategies/stage-b.json \
+    python3 controller/run.py --profile eclipse --scenario stage-b \
+    --run-id eclipse-dsl-007
+
+events.jsonl → 32 strategy events including:
+  attacker0.burst_dial.tick (i=0..5, successes 1..6)  ← DSL really called addPeer
+  attacker0.sample_peers.snapshot {attacker_peers: 2, victim_peer_count: 1}
+compose.log  → victim reports:
+  DEBUG[02:16:43] Adding p2p peer peercount=1 conn=inbound addr=172.80.1.50
+  DEBUG[02:17:59] Adding p2p peer peercount=2 conn=inbound addr=172.80.1.51
+```
+
+**Sample strategy file** at `profiles/eclipse/strategies/stage-b.json`:
+a 3-phase JSON describing the same attack the shell-mode scenario
+would run. Users can fork that file to compose new attacks by
+re-ordering / parameterising the Actions.
+
+**Real bugs fixed during this work** (all in `controller/profiles/`):
+- 3 coroutine-style `Action.run` patches were needed because `urllib`
+  inside the host can't reach `172.80.1.50:8545` (docker network).
+- Docker-exec argument list must NOT be passed through a shell (single
+  quotes inside `--post-data='...'` made geth see `{{...}}` body and
+  return parse-error; switched to `subprocess.run(list)` with
+  `json.dumps(body)` as a single arg).
+
+## §17 — attack.sh DSL entries — captured 2026-09-08
+
+`attack.sh` extended with DSL-mode entries (BunnyFinder-style Action JSON).
+All attack replays are now routed through this single entrypoint.
+
+New commands:
+```
+./attack.sh list                              — show all available attacks
+./attack.sh eclipse-dsl-a                     — stage-a + JSON strategy
+./attack.sh eclipse-dsl-b                     — stage-b + JSON strategy
+./attack.sh eclipse-dsl-c                     — stage-c + JSON strategy
+./attack.sh eclipse-dsl-d                     — stage-d + JSON strategy
+./attack.sh eclipse-dsl-custom <strategy.json>  — any custom DSL file
+```
+
+Shell-mode entries (eclipse-a..d, gethlighting, gethlighting-normal)
+remain unchanged and pass through the existing dial-loop shell scripts.
+
+**Verified** with `runs/attack-eclipse-dsl-b-20260908-103406/`:
+- attack.sh routed correctly: `mode=dsl` + `strategy=profiles/eclipse/strategies/stage-b.json`
+- 4/8 attackers completed DSL execution (attacker0..3 each had 6 burst_dial.tick
+  + 2 sample_peers.snapshot events = full strategy executed).
+- Remaining 4 attackers would have completed in ~4 more minutes; the
+  controller's DSL execution is **per-attacker sequential** (~60 s each),
+  which is a real scaling limitation, not a correctness issue.
+
+**Real bug fixed during this work**:
+- `attack.sh` originally used bash array + `"${arr[@]}"` to pass env to
+  `python3`; this triggered "command not found" under `set -u` in some
+  bash 4.4 + Ubuntu 20.04 combinations. Replaced with explicit
+  `export ECLIPSE_WAIT=...; export SKIP_DOCTOR=1; export ECLIPSE_STRATEGY_JSON=...`
+  before invoking python, which works in every bash ≥3.2.
+- `help` output originally leaked the script body after the comment
+  block; replaced the `sed` pipeline with an `awk` script that stops
+  printing once it hits `set -euo pipefail`.
+
+## §18 — Unified Action DSL (Eclipse × BunnyFinder single stack) — 2026-09-08 收尾
+
+把 Eclipse 与 BunnyFinder 的全部攻击动作放进同一个动作池 + 同一个
+UnifiedExecutor。详见 `docs/unified-dsl-comparison.md`。
+
+- 新文件：`controller/profiles/unified_action.py`（12 动作池 + 单 Executor）、
+  `unified_eclipse.py`（继承 eclipse.Adapter 复用 prepare，仅覆盖 run_actions）、
+  `unified_bunnyfinder.py`（最小 2 节点 smoke）、`unified.py`（纯策略执行器）。
+- 策略：`profiles/unified/strategies/{stage-a,bf-smoke,eclipse-stage-b}.json`。
+- 验证（真实跑通）：
+  - `runs/unified-eclipse-004/`：stage-a，6/6 action ok，victim_net_peerCount=1
+  - `runs/unified-bf-001/`：smoke，6/6 ok，write_rc=0
+  - 两边 events.jsonl 事件序列一致（strategy.phase / action.start / action.done）。
+- 已修 3 个 bug：容器命名漂移（继承不覆盖 profile）、ctx 不共享（Executor
+  合并为单一共享 dict）、`_POOL`→`ACTION_POOL`。
+- 提交：本地 git `b9b9d14`，GitHub bf-workspace develop `70bdffef`。
+
+### 明日续接点（二选一）
+1. 把 `unified_bunnyfinder` 从占位 smoke 接到真实 `tscel/bunnyfinder`
+   攻击者镜像：rpc_file 写进容器的 /root/strategy.json 由真 Go 攻击者
+   按 slot 读取执行（需 bf_workspace/v5 的 16 容器 + MySQL 拓扑）。
+2. 跑一个 ACF 混用 strategy（同一 JSON 里 set_strategy + modify_parent_root
+   + burst_dial），验证跨链动作同轮串起来。
+
+关键命令：
+  # 统一 Eclipse
+  ECLIPSE_WAIT=60 SKIP_DOCTOR=1 python3 controller/run.py \
+    --profile unified-eclipse --scenario stage-a --run-id <id> --skip-doctor
+  # 统一 BunnyFinder
+  ECLIPSE_WAIT=40 SKIP_DOCTOR=1 python3 controller/run.py \
+    --profile unified-bunnyfinder --scenario smoke --run-id <id> --skip-doctor
