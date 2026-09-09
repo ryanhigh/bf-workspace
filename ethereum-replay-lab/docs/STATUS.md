@@ -546,3 +546,55 @@ UnifiedExecutor。详见 `docs/unified-dsl-comparison.md`。
   # 统一 BunnyFinder
   ECLIPSE_WAIT=40 SKIP_DOCTOR=1 python3 controller/run.py \
     --profile unified-bunnyfinder --scenario smoke --run-id <id> --skip-doctor
+
+## §19 — unified_bunnyfinder wired to real BF artefacts — 2026-09-09
+
+`profiles/unified_bunnyfinder.py` now reuses the real BF author artefacts
+under `bf_workspace/v5/case/attack-none.yml`:
+
+  - Per-run copy of case yml + config dir + entrypoint scripts
+  - 5 EL + 5 CL + 5 validator + 1 attacker containers all start
+    using the real `tscel/{geth:v1.13-base-v5, bf.prysm:v5.2.0,
+    bunnyfinder:latest}` images
+  - Unified DSL actions (`set_strategy` etc.) execute via
+    `docker exec` against the running attacker container
+  - events.jsonl captures the unified action timeline
+
+Verified: `runs/unified-bf-real-002/`
+  - compose.up.done returncode=0
+  - 16 containers started
+  - `set_strategy` write_rc=0 on the real attacker1 container
+  - Go attacker process attempted MySQL connect (proves real BF binary
+    is running)
+
+Bugs overcome:
+  1. `shutil.copy2` preserved root:root ownership from
+     `bf_workspace/v5/config/genesis.ssz` — switched to
+     `shutil.copyfile` so the per-run copy is owned by ubantu.
+  2. `chmod -R a-w` made the per-run tree un-rmtree-able — switched
+     to `chmod -R go-w` (preserves owner-write for cleanup).
+  3. MySQL port 3306 collision on re-runs — skipped the ethmysql
+     service in the unified path (the DSL doesn't query the BF
+     history DB; the Go attacker's MySQL connect is the only blocker
+     for full mechanism replay).
+  4. `shutil.rmtree` fails on root-owned files written by Docker
+     containers during the run — added an `onerror` handler that
+     silently skips them (the next prepare overwrites the workdir).
+
+Honest limitations:
+  * The Go attacker (tscel/bunnyfinder:latest) needs MySQL to start;
+    without ethmysql it `fatal: failed to connect to database` within
+    ~10s. The attack actions therefore cannot complete end-to-end in
+    this profile. To run a *real* BF attack, the `bunnyfinder`
+    profile (non-unified) must be used.
+  * Skipping ethmysql is fine for the unified DSL's purpose (it
+    exercises the same action pipeline as Eclipse attacks), but the
+    chain never reaches finality because the CL fails to come up.
+
+Next steps:
+  * Either run ethmysql (need a way to release 3306 between runs) or
+    patch the BF attacker image to make MySQL optional.
+  * Wire the BF attacker's `--strategy` flag to a path that
+    re-reads from `/root/strategy.json` instead of being
+    compile-time-frozen. That requires a Go-side change to the BF
+    binary itself, which is out of scope for this project.

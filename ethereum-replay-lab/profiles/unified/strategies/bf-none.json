@@ -1,0 +1,29 @@
+{
+  "uid": "bf-none-unified",
+  "category": "baseline",
+  "phases": [
+    {
+      "t_rel_seconds": 0,
+      "phase": "PREP",
+      "actions": [
+        {"name": "sleep", "params": {"seconds": 3}},
+        {"name": "set_strategy", "params": {"strategy": "baseline"}},
+        {"name": "delay_to_next_slot", "params": {"fallback_seconds": 12}}
+      ]
+    },
+    {
+      "t_rel_seconds": 25,
+      "phase": "ATTACK",
+      "actions": [
+        {"name": "modify_parent_root", "params": {"slot_offset": 1}}
+      ]
+    },
+    {
+      "t_rel_seconds": 45,
+      "phase": "SETTLE",
+      "actions": [
+        {"name": "set_strategy", "params": {"strategy": "settle"}}
+      ]
+    }
+  ]
+}
