@@ -29,6 +29,41 @@
 
 > 这是加"共识层观测"的必然代价：攻击节点和观测链 EL 必须同代同网。
 
+### 〇.1 三篇论文的 Geth 版本（论文原文核对）
+
+下表依据三篇 PDF 原文逐条核对得出，不是推测：
+
+| 论文 | 论文使用的 Geth 版本 | 发布/研究时点 | Merge 前后 |
+|---|---|---|---|
+| **Eclipse**（WWW 2026）| **v1.14.3**（原文[45]，2024-05-09 发布）| 2024 | **POST-MERGE** |
+| **Gethlighting**（NDSS 2023）| **v1.10.20**（实验版本）| 2022 上半年 | **PRE-MERGE** |
+| **Nontargeted Delay**（IEEE TCyb）| **v1.10.19**（修改版）| 2022 前后 | **PRE-MERGE** |
+
+**Merge 分界（关键事实）**：
+- The Merge = 2022-09-15（PoW → PoS）
+- **Geth v1.10.23 是第一个 post-merge 版本**；v1.10.21 已引入 Sepolia PoS 支持
+- **v1.10.20 及之前 = PRE-MERGE（无 engine API，无法组 PoS 链）**
+- **v1.14.3 = POST-MERGE（有 engine API，支持 PoS，能组链出块+finalize）**
+
+### 〇.2 各论文的漏洞修复声明（论文原文核对）
+
+| 论文 | 利用的机制/漏洞 | 是否声明后续修复 | 原文证据 |
+|---|---|---|---|
+| **Eclipse** | 连接槽预占（每节点只收 34 incoming）+ discovery 表/DNS 污染 | **明确"至今未修复"** | "They acknowledged our reported problem... though **no final fix has been released yet**."；早期缓解："Since v1.9.11, Ethereum also uses DNS-based peer discovery" |
+| **Gethlighting** | devp2p 消息并发处理不公平 / TX 泛洪（20 SLOC 核心逻辑）| **明确已修复（Geth 1.11.0 hotfix）** | "Ethereum Foundation has acknowledged this vulnerability in September 2022 and one of our countermeasures has been **accepted as a hotfix for Geth 1.11.0**." |
+| **Nontargeted Delay** | 连接管理缺陷（大量傀儡连接：抬 maxpeer、伪造 nodeID、绕冗余校验）| **未见弃用/修复声明**（2025 提交，称在 ETHW/premerge 有效；未在 post-merge 复现）| 全文只提 "bypass connection restrictions"，未声明 hotfix |
+
+### 〇.3 对方案的关键影响
+
+1. **三个版本分属两代，无法在同一 devp2p 网络共存**：
+   - Gethlighting / Nontargeted → v1.10.x（pre-merge，devp2p 协议旧）
+   - Eclipse → v1.14.3（post-merge，需 engine API）
+2. **若三攻击要放同一条链上混合**，必须统一到 **post-merge 现代 geth（v1.14+ / latest）**——唯一同时满足"组 PoS 观测链"和"三攻击 devp2p 协议一致"。
+3. **Gethlighting / Nontargeted 是 pre-merge 时代发现/验证的机制**，移植到现代 geth 需重新验证：
+   - Gethlighting：v1.10.20 漏洞在 **1.11.0 已修**，移植需判断机制是否重现（或仅部分适用）
+   - Nontargeted：post-merge 连接限制已变（v1.14 每节点 34 incoming 为 Eclipse 论文确认），需重测
+4. **Eclipse 是三者中唯一"论文版本本身就在 post-merge"**，直接用现代 geth，无 GAP。
+
 ---
 
 ## 一、总体架构（两层 + 一个编排器）
@@ -235,7 +270,9 @@ class UnifiedExecutor:
 
 ## 九、待办 / 待评审确认
 
-- [ ] 版本结论：统一现代 geth (latest/1.17.x) 作为攻击+观测共同底座，是否同意
+- [x] 版本结论：统一现代 geth (latest/1.17.x) 作为攻击+观测共同底座——已按论文原文核对
+      （§〇.1：Eclipse=v1.14.3 post-merge，Gethlighting=v1.10.20 pre-merge，
+      Nontargeted=v1.10.19 pre-merge；§〇.3 结论）
 - [ ] Nontargeted / Gethlighting 机制移植到现代 geth，标 `[GAP-移植]`，是否接受
 - [ ] 磁盘 2GB 约束下"一次一序列 + 跑完拆"，是否接受
 - [ ] 是否采纳第 8 节落地顺序，从阶段 1 工具链验证开始
