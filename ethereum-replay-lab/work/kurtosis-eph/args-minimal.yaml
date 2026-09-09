@@ -1,0 +1,25 @@
+# Minimal PoS testnet to verify Geth v1.14.3 <-> Lighthouse engine API.
+# Uses preset=minimal (lightweight, 12s slots) + network=kurtosis (local
+# launcher, no external devnet URL). Forces Deneb-only (electra far-future)
+# because Geth v1.14.3 tops out at Engine API v3 (Deneb).
+participants:
+  - el_type: geth
+    el_image: ethereum/client-go:v1.14.3
+    cl_type: lighthouse
+    cl_image: sigp/lighthouse:latest
+    use_separate_vc: true
+    vc_type: lighthouse
+    vc_image: sigp/lighthouse:latest
+    count: 1
+network_params:
+  preset: minimal
+  network: kurtosis
+  network_id: "3151908"
+  seconds_per_slot: 12
+  genesis_delay: 20
+  num_validator_keys_per_node: 64
+  deneb_fork_epoch: 0
+  electra_fork_epoch: 18446744073709551615   # far-future: stay on Deneb (v3)
+  fulu_fork_epoch: 18446744073709551615
+additional_services: []
+ethereum_metrics_exporter_enabled: false
