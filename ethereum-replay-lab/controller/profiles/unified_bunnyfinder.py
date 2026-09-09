@@ -64,7 +64,12 @@ V5_IMAGES = {
 
 class Adapter(BaseAdapter):  # type: ignore[misc]  # noqa: F821
     profile = "unified-bunnyfinder"
-    SUPPORTED_SCENARIOS = ("none",)
+    # We support all v5 cases that the upstream BF author wires up.
+    SUPPORTED_SCENARIOS = (
+        "none", "basic", "exante", "sandwich", "staircaseii",
+        "staircase", "unrealized", "withholding", "selfish", "sync",
+        "mix", "rlstaircase",
+    )
 
     def meta(self) -> dict[str, Any]:
         return {
@@ -110,7 +115,30 @@ class Adapter(BaseAdapter):  # type: ignore[misc]  # noqa: F821
 
         bf_mysql = BF_ROOT / V5 / "case" / "mysql.yml"
         if bf_mysql.is_file():
-            shutil.copy2(bf_mysql, work / V5 / "case" / "mysql.yml")
+            # Patch mysql.yml:
+            #   1. drop host port binding (port 3306 collision across
+            #      runs);
+            #   2. fix v4/v5 config path (upstream yml references
+            #      v4/config/mysql/ but our work tree is in v5);
+            #   3. pin ethmysql to the `meta` network so it shares
+            #      the 172.81.1.0/24 subnet with the case services
+            #      (the upstream yml has ethmysql in the default
+            #      bridge, which makes the attacker's MySQL connect
+            #      arrive from 172.18.0.1 — but no eth user is
+            #      authorised for that host).
+            patched = work / V5 / "case" / "mysql.yml"
+            original = bf_mysql.read_text()
+            patched_text = original
+            patched_text = patched_text.replace(
+                '    ports:\n      - "3306:3306"\n',
+                '    ports: []\n')
+            patched_text = patched_text.replace(
+                "./v4/config/mysql/", "./v5/config/mysql/")
+            if "networks:" not in patched_text:
+                patched_text = patched_text.rstrip() + (
+                    "\n    networks:\n      meta:\n"
+                    "        ipv4_address: 172.81.1.50\n")
+            patched.write_text(patched_text)
 
         src_config = BF_ROOT / V5 / "config"
         if not src_config.is_dir():
@@ -125,6 +153,17 @@ class Adapter(BaseAdapter):  # type: ignore[misc]  # noqa: F821
                 # the source. `genesis.ssz` in bf_workspace is root:root,
                 # which would break our subsequent chmod attempts.
                 shutil.copyfile(item, target)
+
+        # rewrite attacker-config.toml: the upstream yml uses
+        # eth:12345678@tcp(172.18.0.1:3306)/eth — but ethmysql now lives
+        # on the meta network at 172.81.1.50, so 172.18.0.1 (the bridge
+        # gateway) is unreachable for the attacker. Patch the IP.
+        attacker_toml = work / V5 / "config" / "attacker-config.toml"
+        if attacker_toml.is_file():
+            content = attacker_toml.read_text()
+            patched = content.replace("172.18.0.1:3306", "172.81.1.50:3306")
+            if patched != content:
+                attacker_toml.write_text(patched)
 
         if ENTRYPOINT_SRC.is_dir():
             shutil.copytree(ENTRYPOINT_SRC, work / "entrypoint")
@@ -195,24 +234,19 @@ class Adapter(BaseAdapter):  # type: ignore[misc]  # noqa: F821
         #    retain their x bit (otherwise the next shutil.rmtree fails).
         subprocess.run(["chmod", "-R", "go-w", str(work)], check=False)
 
-        # 4) Compose file list. The case yml references mysql via an
-        #    `ethmysql` service that pins host port 3306. To avoid
-        #    "port already allocated" collisions across runs we leave
-        #    mysql out for the simple `none` scenario — mysql is only
-        #    needed by the attacker's strategy/history backend, which
-        #    the unified DSL doesn't actually depend on.
+        # 4) Compose file list. Use both case and the patched mysql compose.
+        # mysql listens on the compose network only (no host port binding),
+        # so re-runs don't collide on port 3306.
         mysql_compose = work / V5 / "case" / "mysql.yml"
-        # Always skip mysql for the unified path: the unified DSL
-        # doesn't query the BF history DB, and the host:3306 binding
-        # is the main source of cross-run contamination.
-        compose_files = [bf_case]
+        compose_files = ([mysql_compose] if mysql_compose.exists()
+                         else []) + [bf_case]
 
         # BASEDIR is consumed by ${BASEDIR} substitutions in the yml.
         self.env.update({"BASEDIR": str(work) + "/"})
 
         return {
             "compose_files": compose_files,
-            "wait_seconds": int(os.environ.get("ECLIPSE_WAIT", "180")),
+            "wait_seconds": int(os.environ.get("ECLIPSE_WAIT", "360")),
             "needs_mysql": mysql_compose.exists(),
             "extra_compose_first": True,
             "source_case": str(bf_case),

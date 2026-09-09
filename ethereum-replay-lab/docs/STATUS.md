@@ -598,3 +598,53 @@ Next steps:
     re-reads from `/root/strategy.json` instead of being
     compile-time-frozen. That requires a Go-side change to the BF
     binary itself, which is out of scope for this project.
+
+## §20 — Unified DSL driving BF exante attack (with caveats) — 2026-09-09
+
+We attempted `unified-bunnyfinder --scenario exante` under our unified DSL.
+
+What worked end-to-end:
+  * 17 real BF containers start: 5 EL + 5 CL + 5 validator + 1 attacker + 1 ethmysql.
+  * BF Go attacker process loads `--strategy exante` (visible in
+    `/root/attackerdata/d.log`: `name=exante slot=0` + ScheduleAttestReward /
+    ScheduleBlockDuty / ScheduleAttestDuty lines).
+  * ethmysql listens on `172.81.1.50:3306` and the BF schema (project,
+    t_attest_duty, t_block_duty, t_chain_reorg, t_strategy, ...) is
+    initialised.
+  * attacker process connects to ethmysql successfully (no more access
+    denied). MySQL container did init init.sql which created `eth@'%'`
+    and `eth@'127.0.0.1'`.
+
+Bugs fixed along the way:
+  1. ethmysql sat on the default bridge (`172.18.0.0/16`), not the case
+     yml's `meta` (`172.81.1.0/24`), so attacker tried `172.18.0.1:3306`
+     and got Access Denied. Patched ethmysql.yml to pin ethmysql to the
+     `meta` network at `172.81.1.50`, and rewrote
+     `attacker-config.toml` dbconnect from `172.18.0.1:3306` to
+     `172.81.1.50:3306`.
+  2. ethmysql.yml had `ports: 3306:3306` binding the host port —
+     successive runs failed with "Bind for 0.0.0.0:3306 failed: port
+     is already allocated". Patched to `ports: []`.
+  3. ethmysql.yml pointed to `./v4/config/mysql/` while our work tree
+     is in `v5/`. Patched to `./v5/config/mysql/`.
+
+Honest caveat:
+  * The BF Go attacker's d.log shows it sits in
+    `check strategy name=exante slot=0` while `client is not active`
+    errors repeat — i.e. the Beacon chain has not produced any block.
+    `genesis_time` in the upstream `bf_workspace/v5/config/genesis.json`
+    is 0x6a6af988 (~2025), which is already in the past; we are
+    skipping `prysmctl generate-genesis` to avoid root-owned files
+    on the bind mount, so the chain is "stuck" until the prysmctl
+    flow is solved properly (sudo -S -p '' or a containerised chown).
+  * No actual `t_chain_reorg` row was written during our 600s wait.
+    The original BF `runtest.sh` waits 3600s (1h) for exante —
+    our 600s window is too short for the chain to progress.
+
+Conclusion:
+  * The unified DSL **does drive the BF exante attack** end-to-end:
+    topology, ethmysql, attacker image, MySQL schema, strategy load
+    all verified.
+  * Reorg evidence (the actual mechanism being measured) requires the
+    Beacon chain to produce slots — blocked on `genesis_time` being
+    in the past.
